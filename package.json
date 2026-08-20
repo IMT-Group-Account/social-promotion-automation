@@ -1,0 +1,38 @@
+{
+  "name": "social-promotion-automation",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node dist/src/main.js",
+    "start:dev": "nest start --watch",
+    "start:worker": "node dist/src/publishing/publish-worker.bootstrap.js",
+    "start:scheduler": "node dist/src/scheduler/scheduler.bootstrap.js",
+    "admin:dev": "npm --prefix frontend run dev",
+    "admin:build": "npm --prefix frontend run build",
+    "lint": "eslint backend/src backend/test --max-warnings=0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test",
+    "build": "tsc -p tsconfig.build.json && node scripts/verify-sql-migrations.mjs"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.1",
+    "@nestjs/core": "^11.2.1",
+    "@nestjs/platform-express": "^11.2.1",
+    "bullmq": "^6.1.2",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.11",
+    "@nestjs/testing": "^11.2.1",
+    "@types/node": "^22.15.3",
+    "@types/pg": "^8.23.1",
+    "eslint": "^10.8.1",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}

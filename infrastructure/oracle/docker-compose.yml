@@ -1,0 +1,35 @@
+name: social-promotion
+
+x-backend: &backend
+  build:
+    context: ../..
+    dockerfile: Dockerfile.backend
+  env_file:
+    - ./backend.env
+  restart: unless-stopped
+  init: true
+
+services:
+  api:
+    <<: *backend
+    command: ["node", "dist/src/main.js"]
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *backend
+    command: ["node", "dist/src/publishing/publish-worker.bootstrap.js"]
+    environment:
+      PUBLISH_WORKER_ENABLED: "true"
+
+  scheduler:
+    <<: *backend
+    command: ["node", "dist/src/scheduler/scheduler.bootstrap.js"]
+    environment:
+      SCHEDULER_ENABLED: "true"
