@@ -26,6 +26,7 @@ test('summarizes one failure without failing waiting sibling jobs', () => {
     id: `job_${index}`, postId: 'post_001', platform: 'x' as const, accountId: 'account_001', status,
     scheduledAt: new Date(), publishedAt: null, remotePostId: null, remotePostUrl: null,
     errorCode: null, errorMessage: null, retryCount: 0, leaseExpiresAt: null, nextRetryAt: null,
+    remoteRequestKey: null, remoteRequestStartedAt: null,
   }));
   assert.equal(service.summarizeStatus(results), 'partially_failed');
 });

@@ -1,6 +1,7 @@
 import { ForbiddenException, Inject, Injectable, NotImplementedException, ServiceUnavailableException } from '@nestjs/common';
 import { THREADS_CREDENTIAL_RESOLVER, type ThreadsCredentialResolver, type ThreadsPublishingCredential } from './threads-credential.service';
 import { THREADS_HTTP_CLIENT, type ThreadsHttpClient } from './threads-http.client';
+import { assertAnalyticsHaveValues, numericProviderMetrics } from './analytics-metrics';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from './social-adapter.interface';
 
 export interface ThreadsReply {
@@ -49,20 +50,20 @@ export class ThreadsAdapter implements SocialAdapter {
     return { remotePostId, publishedAt: new Date() };
   }
 
-  async getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult> {
+  async getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult> {
     const credential = await this.readCredential(socialAccountId);
     const response = await this.http.request({
-      method: 'GET', url: this.objectUrl(postId), accessToken: credential.accessToken,
+      method: 'GET', url: this.objectUrl(remotePostId), accessToken: credential.accessToken,
       parameters: { fields: 'id,permalink,text,timestamp,username' },
     });
     const payload = this.object(response.body);
-    return { remotePostId: this.string(payload.id) ?? postId, remotePostUrl: this.string(payload.permalink) ?? undefined, status: 'published' };
+    return { remotePostId: this.string(payload.id) ?? remotePostId, remotePostUrl: this.string(payload.permalink) ?? undefined, status: 'published' };
   }
 
-  async getReplies(postId: string, socialAccountId?: string): Promise<readonly ThreadsReply[]> {
+  async getReplies(remotePostId: string, socialAccountId: string): Promise<readonly ThreadsReply[]> {
     const credential = await this.readCredential(socialAccountId);
     const response = await this.http.request({
-      method: 'GET', url: this.edgeUrl(postId, 'replies'), accessToken: credential.accessToken,
+      method: 'GET', url: this.edgeUrl(remotePostId, 'replies'), accessToken: credential.accessToken,
       parameters: { fields: 'id,permalink,text,timestamp,username' },
     });
     const payload = this.object(response.body);
@@ -75,18 +76,23 @@ export class ThreadsAdapter implements SocialAdapter {
     });
   }
 
-  async getAnalytics(postId: string, socialAccountId?: string): Promise<PostAnalytics> {
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> {
     const credential = await this.readCredential(socialAccountId);
     const template = process.env.THREADS_ANALYTICS_URL;
     if (!template) throw new NotImplementedException('THREADS_ANALYTICS_URL configuration is required.');
-    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(postId)), accessToken: credential.accessToken });
+    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(remotePostId)), accessToken: credential.accessToken });
     const payload = this.object(response.body);
-    const views = this.number(payload.views ?? payload.impressions ?? payload.reach);
-    if (views === null) throw new ServiceUnavailableException('Threads analytics response lacks view metrics.');
-    return {
-      views, likes: this.number(payload.likes) ?? 0, comments: this.number(payload.comments ?? payload.replies) ?? 0,
-      shares: this.number(payload.shares ?? payload.reposts) ?? 0, clicks: this.number(payload.clicks) ?? 0, capturedAt: new Date(),
-    };
+    return assertAnalyticsHaveValues({
+      impressions: this.number(payload.impressions) ?? undefined,
+      reach: this.number(payload.reach) ?? undefined,
+      views: this.number(payload.views) ?? undefined,
+      likes: this.number(payload.likes) ?? undefined,
+      comments: this.number(payload.comments ?? payload.replies) ?? undefined,
+      shares: this.number(payload.shares) ?? undefined,
+      reposts: this.number(payload.reposts) ?? undefined,
+      clicks: this.number(payload.clicks) ?? undefined,
+      rawMetrics: numericProviderMetrics(payload), capturedAt: new Date(),
+    }, 'Threads');
   }
 
   private containerParameters(input: { text: string; media: readonly { type: 'image' | 'video'; url: string }[] }): Record<string, string> {
@@ -112,13 +118,13 @@ export class ThreadsAdapter implements SocialAdapter {
     return credential;
   }
 
-  private async readCredential(socialAccountId: string | undefined): Promise<ThreadsPublishingCredential> {
+  private async readCredential(socialAccountId: string): Promise<ThreadsPublishingCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScope(credential, 'threads_basic');
     return credential;
   }
 
-  private async resolve(socialAccountId: string | undefined): Promise<ThreadsPublishingCredential> {
+  private async resolve(socialAccountId: string): Promise<ThreadsPublishingCredential> {
     if (!socialAccountId) throw new ForbiddenException('Threads account context is required.');
     return this.credentials.resolve(socialAccountId);
   }

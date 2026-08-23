@@ -1,6 +1,7 @@
 import { ForbiddenException, Inject, Injectable, NotImplementedException, ServiceUnavailableException } from '@nestjs/common';
 import { LINKEDIN_CREDENTIAL_RESOLVER, type LinkedInCredentialResolver, type LinkedInPublishingCredential } from './linkedin-credential.service';
 import { LINKEDIN_HTTP_CLIENT, type LinkedInHttpClient } from './linkedin-http.client';
+import { assertAnalyticsHaveValues, numericProviderMetrics } from './analytics-metrics';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from './social-adapter.interface';
 
 @Injectable()
@@ -52,35 +53,37 @@ export class LinkedInAdapter implements SocialAdapter {
     });
   }
 
-  async getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult> {
+  async getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult> {
     const credential = await this.credentialForRead(socialAccountId);
-    const response = await this.http.request({ method: 'GET', url: this.postUrl(postId), accessToken: credential.accessToken });
+    const response = await this.http.request({ method: 'GET', url: this.postUrl(remotePostId), accessToken: credential.accessToken });
     const lifecycleState = this.readLifecycleState(response.body);
-    return { remotePostId: postId, status: lifecycleState === 'PUBLISHED' ? 'published' : 'unknown' };
+    return { remotePostId, status: lifecycleState === 'PUBLISHED' ? 'published' : 'unknown' };
   }
 
-  async deletePost(postId: string, socialAccountId?: string): Promise<void> {
+  async deletePost(remotePostId: string, socialAccountId: string): Promise<void> {
     const credential = await this.credentialForWrite(socialAccountId);
-    await this.http.request({ method: 'DELETE', url: this.postUrl(postId), accessToken: credential.accessToken, extraHeaders: { 'X-RestLi-Method': 'DELETE' } });
+    await this.http.request({ method: 'DELETE', url: this.postUrl(remotePostId), accessToken: credential.accessToken, extraHeaders: { 'X-RestLi-Method': 'DELETE' } });
   }
 
-  async getAnalytics(postId: string, socialAccountId?: string): Promise<PostAnalytics> { return this.getStatistics(postId, socialAccountId); }
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> { return this.getStatistics(remotePostId, socialAccountId); }
 
-  async getStatistics(postId: string, socialAccountId?: string): Promise<PostAnalytics> {
+  async getStatistics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> {
     const credential = await this.credentialForRead(socialAccountId);
     const template = process.env.LINKEDIN_ANALYTICS_URL;
     if (!template) throw new NotImplementedException('LinkedIn analytics endpoint configuration is required.');
-    const url = template.replace('{postUrn}', encodeURIComponent(postId));
+    const url = template.replace('{postUrn}', encodeURIComponent(remotePostId));
     const response = await this.http.request({ method: 'GET', url, accessToken: credential.accessToken });
     const payload = this.object(response.body);
-    const views = this.number(payload.views ?? payload.impressions ?? payload.impressionCount);
-    if (views === null) throw new ServiceUnavailableException('LinkedIn analytics response lacks view metrics.');
-    return {
-      views, likes: this.number(payload.likes ?? payload.reactions ?? payload.reactionCount) ?? 0,
-      comments: this.number(payload.comments ?? payload.commentCount) ?? 0,
-      shares: this.number(payload.shares ?? payload.shareCount) ?? 0,
-      clicks: this.number(payload.clicks ?? payload.clickCount) ?? 0, capturedAt: new Date(),
-    };
+    return assertAnalyticsHaveValues({
+      impressions: this.number(payload.impressions ?? payload.impressionCount) ?? undefined,
+      reach: this.number(payload.reach) ?? undefined,
+      views: this.number(payload.views) ?? undefined,
+      likes: this.number(payload.likes) ?? undefined,
+      comments: this.number(payload.comments ?? payload.commentCount) ?? undefined,
+      shares: this.number(payload.shares ?? payload.shareCount) ?? undefined,
+      clicks: this.number(payload.clicks ?? payload.clickCount) ?? undefined,
+      rawMetrics: numericProviderMetrics(payload), capturedAt: new Date(),
+    }, 'LinkedIn');
   }
 
   private async createPost(socialAccountId: string, commentary: string, content: Record<string, unknown> | undefined): Promise<PublishResult> {
@@ -99,19 +102,19 @@ export class LinkedInAdapter implements SocialAdapter {
     return { remotePostId, publishedAt: new Date() };
   }
 
-  private async credentialForWrite(socialAccountId: string | undefined): Promise<LinkedInPublishingCredential> {
+  private async credentialForWrite(socialAccountId: string): Promise<LinkedInPublishingCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScope(credential, credential.authorUrn.startsWith('urn:li:organization:') ? 'w_organization_social' : 'w_member_social');
     return credential;
   }
 
-  private async credentialForRead(socialAccountId: string | undefined): Promise<LinkedInPublishingCredential> {
+  private async credentialForRead(socialAccountId: string): Promise<LinkedInPublishingCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScope(credential, credential.authorUrn.startsWith('urn:li:organization:') ? 'r_organization_social' : 'r_member_social');
     return credential;
   }
 
-  private async resolve(socialAccountId: string | undefined): Promise<LinkedInPublishingCredential> {
+  private async resolve(socialAccountId: string): Promise<LinkedInPublishingCredential> {
     if (!socialAccountId) throw new ForbiddenException('LinkedIn account context is required.');
     return this.credentials.resolve(socialAccountId);
   }

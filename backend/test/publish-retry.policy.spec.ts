@@ -15,7 +15,7 @@ test('publishing retries follow 30 seconds, 2 minutes, then 10 minutes', () => {
   assert.equal(retryDelayForBullMq(3), 600_000);
 });
 
-test('401 and 403 are terminal, while 429 and provider 500 are retryable', () => {
+test('401 and 403 are terminal, while 429 retries safely and provider 500 is reconciled before retry', () => {
   const expired = classifyPublishFailure(new UnauthorizedException('expired'));
   const forbidden = classifyPublishFailure(new ForbiddenException('scope missing'));
   const rateLimited = classifyPublishFailure(new SocialApiHttpError('X', 429));
@@ -27,8 +27,10 @@ test('401 and 403 are terminal, while 429 and provider 500 are retryable', () =>
   assert.equal(forbidden.retryable, false);
   assert.deepEqual(rateLimited.code, 'RATE_LIMITED');
   assert.equal(rateLimited.retryable, true);
+  assert.equal(rateLimited.ambiguous, false);
   assert.deepEqual(upstreamFailure.code, 'UPSTREAM_SERVER_ERROR');
   assert.equal(upstreamFailure.retryable, true);
+  assert.equal(upstreamFailure.ambiguous, true);
   assert.equal(shouldRetryPublish(rateLimited, 3), true);
   assert.equal(shouldRetryPublish(rateLimited, 4), false);
 });

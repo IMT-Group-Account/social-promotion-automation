@@ -9,13 +9,8 @@ export interface AnalyticsCollectionTarget {
   remotePostId: string;
 }
 
-export interface CampaignPlatformAnalytics {
+export interface CampaignPlatformAnalytics extends Omit<PostAnalytics, 'capturedAt'> {
   platform: SocialPlatform;
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  clicks: number;
   capturedAt: Date | null;
 }
 

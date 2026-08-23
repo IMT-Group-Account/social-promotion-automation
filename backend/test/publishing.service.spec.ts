@@ -12,8 +12,9 @@ const post: Post = {
 
 function job(platform: SocialPublishJob['platform']): SocialPublishJob {
   return {
-    id: `${platform}_job`, postId: post.id, platform, accountId: `${platform}_account`, status: 'processing', scheduledAt: post.scheduledAt,
+    id: `${platform}_job`, postId: post.id, platform, accountId: `${platform}_account`, status: 'remote_requesting', scheduledAt: post.scheduledAt,
     publishedAt: null, remotePostId: null, remotePostUrl: null, errorCode: null, errorMessage: null, retryCount: 0, leaseExpiresAt: new Date(), nextRetryAt: null,
+    remoteRequestKey: `social-publish:${platform}_job`, remoteRequestStartedAt: new Date(),
   };
 }
 
@@ -21,7 +22,7 @@ test('a failed X adapter changes only the X job result', async () => {
   const xAdapter: SocialAdapter = {
     platform: 'x',
     async publish(_post: SocialPost) { throw new Error('X upstream unavailable'); },
-    async getPost() { return { remotePostId: 'unused', status: 'unknown' as const }; },
+    async getPost(_remotePostId: string, _socialAccountId: string) { return { remotePostId: 'unused', status: 'unknown' as const }; },
   };
   const publishing = new PublishingService([xAdapter], new FormatterService());
   const linkedinBefore = job('linkedin');
@@ -37,14 +38,32 @@ test('a failed X adapter changes only the X job result', async () => {
 });
 
 test('adapter selection is platform-agnostic to the publishing service', async () => {
+  let idempotencyKey: string | null = null;
   const linkedinAdapter: SocialAdapter = {
     platform: 'linkedin',
-    async publish() { return { remotePostId: 'linkedin_123', remotePostUrl: 'https://linkedin.example/post/123', publishedAt: new Date('2026-08-21T00:05:00Z') }; },
-    async getPost() { return { remotePostId: 'linkedin_123', status: 'published' as const }; },
+    async publish(_post, request) { idempotencyKey = request.idempotencyKey; return { remotePostId: 'linkedin_123', remotePostUrl: 'https://linkedin.example/post/123', publishedAt: new Date('2026-08-21T00:05:00Z') }; },
+    async getPost(_remotePostId: string, _socialAccountId: string) { return { remotePostId: 'linkedin_123', status: 'published' as const }; },
   };
   const result = await new PublishingService([linkedinAdapter], new FormatterService()).publish(post, job('linkedin'));
 
   assert.equal(result.ok, true);
-  assert.equal(result.job.status, 'published');
+  assert.equal(result.job.status, 'remote_confirmed');
   assert.equal(result.job.remotePostId, 'linkedin_123');
+  assert.equal(idempotencyKey, 'social-publish:linkedin_job');
+});
+
+test('provider reconciliation confirms an ambiguous request before another publish attempt', async () => {
+  const xAdapter: SocialAdapter = {
+    platform: 'x',
+    async publish() { throw new Error('must not publish during reconciliation'); },
+    async reconcilePublish(_post, request) {
+      assert.equal(request.idempotencyKey, 'social-publish:x_job');
+      return { status: 'confirmed', result: { remotePostId: 'x_123', publishedAt: new Date('2026-08-21T00:06:00Z') } };
+    },
+    async getPost(_remotePostId: string, _socialAccountId: string) { return { remotePostId: 'unused', status: 'unknown' as const }; },
+  };
+  const result = await new PublishingService([xAdapter], new FormatterService()).reconcile(post, job('x'));
+
+  assert.equal(result.status, 'confirmed');
+  if (result.status === 'confirmed') assert.equal(result.result.remotePostId, 'x_123');
 });

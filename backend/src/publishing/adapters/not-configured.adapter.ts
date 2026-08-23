@@ -10,7 +10,7 @@ export abstract class NotConfiguredAdapter implements SocialAdapter {
   abstract readonly platform: SocialPlatform;
 
   async publish(_post: SocialPost): Promise<PublishResult> { throw this.unavailable(); }
-  async getPost(_postId: string): Promise<SocialPostResult> { throw this.unavailable(); }
+  async getPost(_remotePostId: string, _socialAccountId: string): Promise<SocialPostResult> { throw this.unavailable(); }
 
   protected unavailable(): ServiceUnavailableException {
     return new ServiceUnavailableException(`${this.platform} publishing adapter is not configured.`);

@@ -8,6 +8,7 @@ import type { ActiveSocialAccountCredential, ConnectedSocialAccount, FacebookPag
 
 process.env.OAUTH_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
 process.env.OAUTH_TOKEN_ENCRYPTION_KEY_VERSION = 'facebook-test-v1';
+process.env.OAUTH_TOKEN_ENCRYPTION_KEYS = JSON.stringify({ 'facebook-test-v1': process.env.OAUTH_TOKEN_ENCRYPTION_KEY });
 
 class FacebookSelectionRepository implements OAuthAccountRepository {
   private state: OAuthAuthorizationState | undefined;

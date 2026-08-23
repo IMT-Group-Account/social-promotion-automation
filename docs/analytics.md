@@ -13,26 +13,30 @@ Successful social_publish_job
 
 ## Common metrics
 
-Every snapshot stores non-negative integer fields:
+Every snapshot stores only the non-negative metrics the platform actually defines:
 
 ```json
 {
-  "platform": "linkedin",
-  "postId": "remote-post-id",
+  "platform": "x",
+  "remotePostId": "remote-post-id",
   "metrics": {
-    "views": 10321,
+    "impressions": 10321,
     "likes": 241,
-    "comments": 31,
-    "shares": 18,
-    "clicks": 413
+    "reposts": 18,
+    "rawMetrics": {
+      "impression_count": 10321,
+      "repost_count": 18
+    }
   }
 }
 ```
 
-Platform adapters normalize their configured GET response into these fields. Values the provider does not expose are stored as `0`; a missing view/impression value is a collection error, so a misleading partial snapshot is never inserted.
+`impressions`, `reach`, `views`, `likes`, `comments`, `shares`, `reposts`, and `clicks` are all optional. Platform adapters do not reinterpret impressions, reach, and views as each other or invent `0` for an unavailable metric. Provider-native non-negative numeric fields are retained in `rawMetrics`; a response with no numeric metric at all is rejected.
+
+The adapter boundary accepts only `remotePostId` and `socialAccountId` for post lookup, deletion, replies, and analytics. A local `posts.id` never crosses into a provider adapter, and the account is mandatory so the credential resolver always selects one specific platform account before making an external request. `social_metrics` stores optional standard metrics and provider-native `raw_metrics` JSONB; aggregate dashboard rows omit unavailable metrics rather than converting absence into zero.
 
 ## Scheduling and dashboard
 
 Set `ANALYTICS_COLLECTION_INTERVAL_MS` to enable the backend scheduler; it is disabled by default. The collector uses a database lease, stale-snapshot interval, and batch limit from `.env.example`. Each campaign dashboard aggregates the newest snapshot for every published job and returns five platform rows, with zero values when no snapshot exists yet.
 
-The analytics endpoint requires upstream application authentication to set `request.user.id`, and the PostgreSQL repository verifies campaign ownership. Apply migration `008` before enabling the scheduler. Each provider's analytics URL, grant, approval, and live response shape must be configured and verified separately; no external GET is sent while its URL is unconfigured.
+The analytics endpoint requires `Authorization: Bearer <our-service-jwt>`; `ServiceJwtAuthGuard` verifies it and sets `request.user.id` from the JWT `sub` claim, and the PostgreSQL repository verifies campaign ownership. Apply migration `008` before enabling the scheduler. Each provider's analytics URL, grant, approval, and live response shape must be configured and verified separately; no external GET is sent while its URL is unconfigured.

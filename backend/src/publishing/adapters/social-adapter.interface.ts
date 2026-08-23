@@ -18,6 +18,15 @@ export interface PublishResult {
   publishedAt: Date;
 }
 
+/** Stable per-job key. Adapters forward it only where the provider documents idempotent writes. */
+export interface PublishRequest {
+  idempotencyKey: string;
+}
+
+export type PublishReconciliation =
+  | { status: 'confirmed'; result: PublishResult }
+  | { status: 'not_found' | 'unknown' | 'unsupported' };
+
 export interface SocialPostResult {
   remotePostId: string;
   remotePostUrl?: string;
@@ -25,20 +34,28 @@ export interface SocialPostResult {
 }
 
 export interface PostAnalytics {
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  clicks: number;
+  impressions?: number;
+  reach?: number;
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  reposts?: number;
+  clicks?: number;
+  rawMetrics?: Record<string, number>;
   capturedAt: Date;
 }
 
 export interface SocialAdapter {
   readonly platform: SocialPlatform;
-  publish(post: SocialPost): Promise<PublishResult>;
-  getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult>;
-  deletePost?(postId: string, socialAccountId?: string): Promise<void>;
-  getAnalytics?(postId: string, socialAccountId?: string): Promise<PostAnalytics>;
+  /** True only when this adapter sends the stable key to a verified provider idempotency mechanism. */
+  readonly supportsIdempotentPublish?: boolean;
+  publish(post: SocialPost, request: PublishRequest): Promise<PublishResult>;
+  /** Optional provider-specific lookup by the stable publish request key. */
+  reconcilePublish?(post: SocialPost, request: PublishRequest): Promise<PublishReconciliation>;
+  getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult>;
+  deletePost?(remotePostId: string, socialAccountId: string): Promise<void>;
+  getAnalytics?(remotePostId: string, socialAccountId: string): Promise<PostAnalytics>;
 }
 
 export const SOCIAL_ADAPTERS = Symbol('SOCIAL_ADAPTERS');

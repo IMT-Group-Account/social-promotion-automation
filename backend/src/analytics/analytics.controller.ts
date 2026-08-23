@@ -1,4 +1,5 @@
-import { Controller, Get, Param, Req, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Param, Req } from '@nestjs/common';
+import type { AuthenticatedRequest } from '../auth/authenticated-request';
 import { AnalyticsService } from './analytics.service';
 import { type SocialPlatform } from '../posts/post.entity';
 
@@ -7,14 +8,16 @@ export class AnalyticsController {
   constructor(private readonly analytics: AnalyticsService) {}
 
   @Get('campaigns/:campaignId/dashboard')
-  dashboard(@Req() request: { user?: { id?: string } }, @Param('campaignId') campaignId: string) {
-    const ownerId = request.user?.id;
-    if (!ownerId) throw new UnauthorizedException('An authenticated owner context is required.');
-    return this.analytics.campaignDashboard(ownerId, campaignId);
+  dashboard(@Req() request: AuthenticatedRequest, @Param('campaignId') campaignId: string) {
+    return this.analytics.campaignDashboard(request.user!.id, campaignId);
   }
 
-  @Get(':platform/:postId')
-  get(@Param('platform') platform: SocialPlatform, @Param('postId') postId: string) {
-    return this.analytics.getPostAnalytics(platform, postId);
+  @Get(':platform/:socialAccountId/:remotePostId')
+  get(
+    @Param('platform') platform: SocialPlatform,
+    @Param('socialAccountId') socialAccountId: string,
+    @Param('remotePostId') remotePostId: string,
+  ) {
+    return this.analytics.getPostAnalytics(platform, remotePostId, socialAccountId);
   }
 }

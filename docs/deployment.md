@@ -75,7 +75,9 @@ Oracle 앞단에는 HTTPS reverse proxy 또는 load balancer를 두고 443만 �
 ## 필수 환경 변수
 
 - `DATABASE_URL`, `REDIS_URL`: backend 전용 연결 정보
-- `OAUTH_TOKEN_ENCRYPTION_KEY`: base64 인코딩한 32-byte AES-256 키
+- `OAUTH_TOKEN_ENCRYPTION_KEYS`: 버전별 base64 인코딩 32-byte AES-256 키 JSON map. 예: `{"v1":"old-key","v2":"current-key"}`
+- `OAUTH_TOKEN_ENCRYPTION_KEY_VERSION`: 새 암호문을 쓸 현재 키 버전. 기존 `v1.<iv>.<tag>.<ciphertext>`는 `v1` 키로 계속 복호화한다.
+- `OAUTH_TOKEN_ENCRYPTION_KEY`: 구 단일 키 배포에서만 사용하는 deprecated 호환 변수. 키 링 구성 시 사용하지 않는다.
 - `PUBLIC_API_ORIGIN`: Oracle API의 HTTPS origin; 각 SNS OAuth callback 등록값의 기준
 - `CORS_ORIGINS`: Vercel frontend의 정확한 origin 목록
 - OAuth, LinkedIn/Meta/Threads/X/Kakao provider 변수: root `.env.example`의 해당 키 전부

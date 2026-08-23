@@ -13,8 +13,9 @@ const post: Post = {
 
 function job(platform: SocialPublishJob['platform']): SocialPublishJob {
   return {
-    id: `${platform}-job`, postId: post.id, platform, accountId: `${platform}-account`, status: 'processing', scheduledAt: post.scheduledAt,
+    id: `${platform}-job`, postId: post.id, platform, accountId: `${platform}-account`, status: 'claimed', scheduledAt: post.scheduledAt,
     publishedAt: null, remotePostId: null, remotePostUrl: null, errorCode: null, errorMessage: null, retryCount: 0, leaseExpiresAt: null, nextRetryAt: null,
+    remoteRequestKey: null, remoteRequestStartedAt: null,
   };
 }
 

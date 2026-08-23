@@ -11,6 +11,8 @@ const analyticsMigration = await readFile(new URL('../backend/migrations/008_soc
 const queueOutboxMigration = await readFile(new URL('../backend/migrations/009_bullmq_publish_outbox.sql', import.meta.url), 'utf8');
 const retryMigration = await readFile(new URL('../backend/migrations/010_publish_retry_state_and_failure_alerts.sql', import.meta.url), 'utf8');
 const canonicalModelMigration = await readFile(new URL('../backend/migrations/011_postgresql_canonical_social_model.sql', import.meta.url), 'utf8');
+const optionalMetricsMigration = await readFile(new URL('../backend/migrations/012_social_metrics_optional_platform_metrics.sql', import.meta.url), 'utf8');
+const remoteReconciliationMigration = await readFile(new URL('../backend/migrations/013_publish_remote_reconciliation.sql', import.meta.url), 'utf8');
 for (const requiredText of [
   'CREATE TABLE posts',
   'CREATE TABLE social_publish_jobs',
@@ -56,5 +58,11 @@ for (const requiredText of ["'waiting', 'processing', 'published', 'failed', 're
 }
 for (const requiredText of ['CREATE TABLE users', 'CREATE TABLE social_posts', 'CREATE TABLE social_metrics', 'RENAME TO oauth_states', 'CREATE TABLE audit_logs', 'social_publish_job_id uuid NOT NULL UNIQUE']) {
   if (!canonicalModelMigration.includes(requiredText)) throw new Error(`Migration is missing canonical PostgreSQL model invariant: ${requiredText}`);
+}
+for (const requiredText of ['ALTER COLUMN views DROP NOT NULL', 'ADD COLUMN impressions bigint', 'ADD COLUMN raw_metrics jsonb NOT NULL', 'social_metrics_raw_metrics_object_check']) {
+  if (!optionalMetricsMigration.includes(requiredText)) throw new Error(`Migration is missing optional platform analytics invariant: ${requiredText}`);
+}
+for (const requiredText of ["'claimed', 'remote_requesting', 'remote_confirmed'", 'remote_request_key text', 'remote_request_started_at timestamptz', 'social_publish_jobs_remote_reconciliation_idx']) {
+  if (!remoteReconciliationMigration.includes(requiredText)) throw new Error(`Migration is missing remote reconciliation invariant: ${requiredText}`);
 }
 console.log('SQL publishing and OAuth migration structure verified.');

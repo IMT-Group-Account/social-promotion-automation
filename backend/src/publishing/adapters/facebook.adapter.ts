@@ -1,6 +1,7 @@
 import { ForbiddenException, Inject, Injectable, NotImplementedException, ServiceUnavailableException } from '@nestjs/common';
 import { FACEBOOK_CREDENTIAL_RESOLVER, type FacebookCredentialResolver, type FacebookPageCredential } from './facebook-credential.service';
 import { FACEBOOK_HTTP_CLIENT, type FacebookHttpClient } from './facebook-http.client';
+import { assertAnalyticsHaveValues, numericProviderMetrics } from './analytics-metrics';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from './social-adapter.interface';
 
 @Injectable()
@@ -44,34 +45,36 @@ export class FacebookAdapter implements SocialAdapter {
     return this.create(input.socialAccountId, 'videos', { file_url: this.https(input.videoUrl), ...(input.description ? { description: input.description } : {}) });
   }
 
-  async getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult> {
+  async getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult> {
     const credential = await this.readCredential(socialAccountId);
-    const response = await this.http.request({ method: 'GET', url: this.objectUrl(postId), accessToken: credential.accessToken, parameters: { fields: 'id,permalink_url,is_published' } });
+    const response = await this.http.request({ method: 'GET', url: this.objectUrl(remotePostId), accessToken: credential.accessToken, parameters: { fields: 'id,permalink_url,is_published' } });
     const payload = this.object(response.body);
-    return { remotePostId: this.string(payload.id) ?? postId, remotePostUrl: this.string(payload.permalink_url) ?? undefined, status: payload.is_published === false ? 'unknown' : 'published' };
+    return { remotePostId: this.string(payload.id) ?? remotePostId, remotePostUrl: this.string(payload.permalink_url) ?? undefined, status: payload.is_published === false ? 'unknown' : 'published' };
   }
 
-  async deletePost(postId: string, socialAccountId?: string): Promise<void> {
+  async deletePost(remotePostId: string, socialAccountId: string): Promise<void> {
     const credential = await this.writeCredential(socialAccountId);
-    await this.http.request({ method: 'DELETE', url: this.objectUrl(postId), accessToken: credential.accessToken });
+    await this.http.request({ method: 'DELETE', url: this.objectUrl(remotePostId), accessToken: credential.accessToken });
   }
 
-  async getAnalytics(postId: string, socialAccountId?: string): Promise<PostAnalytics> { return this.getStatistics(postId, socialAccountId); }
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> { return this.getStatistics(remotePostId, socialAccountId); }
 
-  async getStatistics(postId: string, socialAccountId?: string): Promise<PostAnalytics> {
+  async getStatistics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> {
     const credential = await this.readCredential(socialAccountId);
     const template = process.env.FACEBOOK_ANALYTICS_URL;
     if (!template) throw new NotImplementedException('FACEBOOK_ANALYTICS_URL configuration is required.');
-    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(postId)), accessToken: credential.accessToken });
+    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(remotePostId)), accessToken: credential.accessToken });
     const payload = this.object(response.body);
-    const views = this.number(payload.views ?? payload.impressions ?? payload.impression_count ?? payload.reach);
-    if (views === null) throw new ServiceUnavailableException('Facebook analytics response lacks view metrics.');
-    return {
-      views, likes: this.number(payload.likes ?? payload.reactions ?? payload.reaction_count) ?? 0,
-      comments: this.number(payload.comments ?? payload.comment_count) ?? 0,
-      shares: this.number(payload.shares ?? payload.share_count) ?? 0,
-      clicks: this.number(payload.clicks ?? payload.click_count) ?? 0, capturedAt: new Date(),
-    };
+    return assertAnalyticsHaveValues({
+      impressions: this.number(payload.impressions ?? payload.impression_count) ?? undefined,
+      reach: this.number(payload.reach) ?? undefined,
+      views: this.number(payload.views) ?? undefined,
+      likes: this.number(payload.likes) ?? undefined,
+      comments: this.number(payload.comments ?? payload.comment_count) ?? undefined,
+      shares: this.number(payload.shares ?? payload.share_count) ?? undefined,
+      clicks: this.number(payload.clicks ?? payload.click_count) ?? undefined,
+      rawMetrics: numericProviderMetrics(payload), capturedAt: new Date(),
+    }, 'Facebook');
   }
 
   private async create(socialAccountId: string, edge: 'feed' | 'photos' | 'videos', parameters: Readonly<Record<string, string>>): Promise<PublishResult> {
@@ -83,19 +86,19 @@ export class FacebookAdapter implements SocialAdapter {
     return { remotePostId, remotePostUrl: this.string(payload.permalink_url) ?? undefined, publishedAt: new Date() };
   }
 
-  private async writeCredential(socialAccountId: string | undefined): Promise<FacebookPageCredential> {
+  private async writeCredential(socialAccountId: string): Promise<FacebookPageCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScope(credential, 'pages_manage_posts');
     return credential;
   }
 
-  private async readCredential(socialAccountId: string | undefined): Promise<FacebookPageCredential> {
+  private async readCredential(socialAccountId: string): Promise<FacebookPageCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScope(credential, 'pages_read_engagement');
     return credential;
   }
 
-  private async resolve(socialAccountId: string | undefined): Promise<FacebookPageCredential> {
+  private async resolve(socialAccountId: string): Promise<FacebookPageCredential> {
     if (!socialAccountId) throw new ForbiddenException('Facebook Page account context is required.');
     return this.credentials.resolve(socialAccountId);
   }

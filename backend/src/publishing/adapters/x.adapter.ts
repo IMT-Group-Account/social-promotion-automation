@@ -3,6 +3,7 @@ import { XApiCostService, X_USAGE_LEDGER, type XUsageLedger, type XUsageOperatio
 import { X_CREDENTIAL_RESOLVER, type XCredentialResolver, type XPublishingCredential } from './x-credential.service';
 import { X_HTTP_CLIENT, type XHttpClient } from './x-http.client';
 import { X_MEDIA_SOURCE, type XMediaSource } from './x-media-source.service';
+import { assertAnalyticsHaveValues, numericProviderMetrics } from './analytics-metrics';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from './social-adapter.interface';
 
 @Injectable()
@@ -49,38 +50,41 @@ export class XAdapter implements SocialAdapter {
     return this.createPost(input.socialAccountId, input.text, mediaIds);
   }
 
-  async deletePost(postId: string, socialAccountId?: string): Promise<void> {
+  async deletePost(remotePostId: string, socialAccountId: string): Promise<void> {
     const credential = await this.writeCredential(socialAccountId);
-    const response = await this.billed(credential, 'post_delete', () => this.http.request({ method: 'DELETE', url: this.postUrl(postId), accessToken: credential.accessToken }));
+    const response = await this.billed(credential, 'post_delete', () => this.http.request({ method: 'DELETE', url: this.postUrl(remotePostId), accessToken: credential.accessToken }));
     if (this.data(response.body).deleted !== true) throw new ServiceUnavailableException('X did not confirm deletion of the post.');
   }
 
-  async getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult> {
+  async getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult> {
     const credential = await this.readCredential(socialAccountId);
     const response = await this.billed(credential, 'post_read', () => this.http.request({
-      method: 'GET', url: this.postUrl(postId), accessToken: credential.accessToken, parameters: { 'tweet.fields': 'id,text' },
+      method: 'GET', url: this.postUrl(remotePostId), accessToken: credential.accessToken, parameters: { 'tweet.fields': 'id,text' },
     }));
     const data = this.data(response.body);
-    return { remotePostId: this.string(data.id) ?? postId, status: 'published' };
+    return { remotePostId: this.string(data.id) ?? remotePostId, status: 'published' };
   }
 
-  async getAnalytics(postId: string, socialAccountId?: string): Promise<PostAnalytics> {
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> {
     const credential = await this.readCredential(socialAccountId);
     const template = process.env.X_ANALYTICS_URL;
     if (!template) throw new NotImplementedException('X_ANALYTICS_URL configuration is required.');
     const response = await this.billed(credential, 'post_read', () => this.http.request({
-      method: 'GET', url: template.replace('{postId}', encodeURIComponent(postId)), accessToken: credential.accessToken,
+      method: 'GET', url: template.replace('{postId}', encodeURIComponent(remotePostId)), accessToken: credential.accessToken,
     }));
     const payload = this.data(response.body);
     const metrics = this.object(payload.metrics ?? payload.public_metrics ?? payload.organic_metrics ?? payload);
-    const views = this.number(metrics.views ?? metrics.impression_count ?? metrics.impressions);
-    if (views === null) throw new ServiceUnavailableException('X analytics response lacks view metrics.');
-    return {
-      views, likes: this.number(metrics.like_count ?? metrics.likes) ?? 0,
-      comments: this.number(metrics.reply_count ?? metrics.comments) ?? 0,
-      shares: this.number(metrics.retweet_count ?? metrics.repost_count ?? metrics.shares) ?? 0,
-      clicks: this.number(metrics.url_link_clicks ?? metrics.clicks) ?? 0, capturedAt: new Date(),
-    };
+    return assertAnalyticsHaveValues({
+      impressions: this.number(metrics.impressions ?? metrics.impression_count) ?? undefined,
+      reach: this.number(metrics.reach) ?? undefined,
+      views: this.number(metrics.views) ?? undefined,
+      likes: this.number(metrics.likes ?? metrics.like_count) ?? undefined,
+      comments: this.number(metrics.comments ?? metrics.reply_count) ?? undefined,
+      shares: this.number(metrics.shares) ?? undefined,
+      reposts: this.number(metrics.reposts ?? metrics.repost_count ?? metrics.retweet_count) ?? undefined,
+      clicks: this.number(metrics.clicks ?? metrics.url_link_clicks) ?? undefined,
+      rawMetrics: numericProviderMetrics(metrics), capturedAt: new Date(),
+    }, 'X');
   }
 
   private async createPost(socialAccountId: string, text: string, mediaIds: readonly string[]): Promise<PublishResult> {
@@ -113,19 +117,19 @@ export class XAdapter implements SocialAdapter {
     catch { this.logger.warn(`X API usage reservation ${id} could not be settled after the external request.`); }
   }
 
-  private async writeCredential(socialAccountId: string | undefined): Promise<XPublishingCredential> {
+  private async writeCredential(socialAccountId: string): Promise<XPublishingCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScopes(credential, ['tweet.read', 'tweet.write', 'users.read']);
     return credential;
   }
 
-  private async readCredential(socialAccountId: string | undefined): Promise<XPublishingCredential> {
+  private async readCredential(socialAccountId: string): Promise<XPublishingCredential> {
     const credential = await this.resolve(socialAccountId);
     this.requireScopes(credential, ['tweet.read', 'users.read']);
     return credential;
   }
 
-  private async resolve(socialAccountId: string | undefined): Promise<XPublishingCredential> {
+  private async resolve(socialAccountId: string): Promise<XPublishingCredential> {
     if (!socialAccountId) throw new ForbiddenException('X account context is required.');
     return this.credentials.resolve(socialAccountId);
   }

@@ -25,7 +25,7 @@ export class AnalyticsService {
     this.adaptersByPlatform = new Map(adapters.map((adapter) => [adapter.platform, adapter]));
   }
 
-  async getPostAnalytics(platform: SocialPlatform, remotePostId: string, socialAccountId?: string) {
+  async getPostAnalytics(platform: SocialPlatform, remotePostId: string, socialAccountId: string) {
     const adapter = this.adaptersByPlatform.get(platform);
     if (!adapter?.getAnalytics) throw new NotImplementedException(`${platform} analytics is not configured.`);
     return adapter.getAnalytics(remotePostId, socialAccountId);
@@ -58,7 +58,7 @@ export class AnalyticsService {
     if (!current) throw new NotFoundException('Campaign not found.');
     const byPlatform = new Map(current.map((item) => [item.platform, item]));
     const platforms = SOCIAL_PLATFORMS.map((platform) => byPlatform.get(platform) ?? {
-      platform, views: 0, likes: 0, comments: 0, shares: 0, clicks: 0, capturedAt: null,
+      platform, capturedAt: null,
     });
     return { campaignId, platforms };
   }
@@ -68,7 +68,7 @@ export class AnalyticsService {
     if (!current) throw new NotFoundException('Post not found.');
     const byPlatform = new Map(current.map((item) => [item.platform, item]));
     const platforms = SOCIAL_PLATFORMS.map((platform) => byPlatform.get(platform) ?? {
-      platform, views: 0, likes: 0, comments: 0, shares: 0, clicks: 0, capturedAt: null,
+      platform, capturedAt: null,
     });
     return { postId, platforms };
   }

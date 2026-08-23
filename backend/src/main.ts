@@ -1,11 +1,14 @@
 import 'reflect-metadata';
+import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { globalValidationPipeOptions } from './validation/global-validation.pipe';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
   app.enableShutdownHooks();
+  app.useGlobalPipes(new ValidationPipe(globalValidationPipeOptions));
 
   const origins = (process.env.CORS_ORIGINS ?? '')
     .split(',')

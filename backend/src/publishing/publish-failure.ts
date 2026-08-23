@@ -5,6 +5,8 @@ export type PublishFailureCode = 'TOKEN_EXPIRED' | 'PERMISSION_DENIED' | 'RATE_L
 export interface PublishFailure {
   code: PublishFailureCode;
   retryable: boolean;
+  /** The remote provider may have accepted the write even though this process lacks its result. */
+  ambiguous: boolean;
   message: string;
 }
 
@@ -18,13 +20,13 @@ export class SocialApiHttpError extends Error {
 export function classifyPublishFailure(error: unknown): PublishFailure {
   const status = statusOf(error);
   const message = safeMessage(error);
-  if (status === 401) return { code: 'TOKEN_EXPIRED', retryable: false, message };
-  if (status === 403) return { code: 'PERMISSION_DENIED', retryable: false, message };
-  if (status === 429) return { code: 'RATE_LIMITED', retryable: true, message };
-  if (status !== null && status >= 500) return { code: 'UPSTREAM_SERVER_ERROR', retryable: true, message };
-  if (status !== null && status >= 400) return { code: 'INVALID_REQUEST', retryable: false, message };
-  if (error instanceof TypeError || isNetworkCode(error)) return { code: 'NETWORK_ERROR', retryable: true, message };
-  return { code: 'UNKNOWN_ERROR', retryable: true, message };
+  if (status === 401) return { code: 'TOKEN_EXPIRED', retryable: false, ambiguous: false, message };
+  if (status === 403) return { code: 'PERMISSION_DENIED', retryable: false, ambiguous: false, message };
+  if (status === 429) return { code: 'RATE_LIMITED', retryable: true, ambiguous: false, message };
+  if (status !== null && status >= 500) return { code: 'UPSTREAM_SERVER_ERROR', retryable: true, ambiguous: true, message };
+  if (status !== null && status >= 400) return { code: 'INVALID_REQUEST', retryable: false, ambiguous: false, message };
+  if (error instanceof TypeError || isNetworkCode(error)) return { code: 'NETWORK_ERROR', retryable: true, ambiguous: true, message };
+  return { code: 'UNKNOWN_ERROR', retryable: true, ambiguous: true, message };
 }
 
 function statusOf(error: unknown): number | null {

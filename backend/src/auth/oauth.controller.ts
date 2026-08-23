@@ -1,6 +1,8 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { OauthService } from './oauth.service';
+import { PublicRoute } from './public-route.decorator';
 
+@PublicRoute()
 @Controller('oauth')
 export class OauthController {
   constructor(private readonly oauth: OauthService) {}

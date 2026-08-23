@@ -20,17 +20,21 @@ class MemoryAnalyticsRepository implements AnalyticsRepository {
 }
 
 class TestAdapter implements SocialAdapter {
-  constructor(readonly platform: SocialPlatform, private readonly analytics: (postId: string, accountId?: string) => Promise<PostAnalytics>) {}
+  constructor(readonly platform: SocialPlatform, private readonly analytics: (remotePostId: string, socialAccountId: string) => Promise<PostAnalytics>) {}
   async publish(_post: SocialPost): Promise<PublishResult> { throw new Error('Not used.'); }
-  async getPost(postId: string): Promise<SocialPostResult> { return { remotePostId: postId, status: 'published' }; }
-  async getAnalytics(postId: string, accountId?: string): Promise<PostAnalytics> { return this.analytics(postId, accountId); }
+  async getPost(remotePostId: string, _socialAccountId: string): Promise<SocialPostResult> { return { remotePostId, status: 'published' }; }
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> { return this.analytics(remotePostId, socialAccountId); }
 }
 
-const metrics: PostAnalytics = { views: 12_200, likes: 241, comments: 31, shares: 18, clicks: 280, capturedAt: new Date('2026-08-20T00:00:00Z') };
+const metrics: PostAnalytics = {
+  impressions: 12_200, likes: 241, comments: 31, reposts: 18,
+  rawMetrics: { impression_count: 12_200, reply_count: 31, repost_count: 18 },
+  capturedAt: new Date('2026-08-20T00:00:00Z'),
+};
 
 test('collects one successful platform snapshot without losing a sibling platform on GET failure', async () => {
   const repository = new MemoryAnalyticsRepository([linkedinTarget, xTarget], []);
-  const linkedin = new TestAdapter('linkedin', async (postId, accountId) => { assert.equal(postId, 'urn:li:share:1'); assert.equal(accountId, 'account-linkedin'); return metrics; });
+  const linkedin = new TestAdapter('linkedin', async (remotePostId, socialAccountId) => { assert.equal(remotePostId, 'urn:li:share:1'); assert.equal(socialAccountId, 'account-linkedin'); return metrics; });
   const x = new TestAdapter('x', async () => { throw new Error('X analytics temporarily unavailable'); });
   const service = new AnalyticsService([linkedin, x], repository);
 
@@ -41,16 +45,16 @@ test('collects one successful platform snapshot without losing a sibling platfor
   assert.deepEqual(result.failed, [{ jobId: 'job-x', platform: 'x', error: 'X analytics temporarily unavailable' }]);
 });
 
-test('returns a five-platform campaign dashboard with the latest known metrics and zero-filled missing platforms', async () => {
-  const repository = new MemoryAnalyticsRepository([], [{ platform: 'linkedin', views: 12_200, likes: 241, comments: 31, shares: 18, clicks: 280, capturedAt: metrics.capturedAt }]);
+test('returns platform-native metrics and leaves unavailable dashboard metrics absent', async () => {
+  const repository = new MemoryAnalyticsRepository([], [{ platform: 'linkedin', ...metrics }]);
   const service = new AnalyticsService([], repository);
   const dashboard = await service.campaignDashboard('owner-001', 'campaign-001');
 
   assert.equal(dashboard.campaignId, 'campaign-001');
   assert.deepEqual(dashboard.platforms.find((item) => item.platform === 'linkedin'), {
-    platform: 'linkedin', views: 12_200, likes: 241, comments: 31, shares: 18, clicks: 280, capturedAt: metrics.capturedAt,
+    platform: 'linkedin', ...metrics,
   });
   assert.deepEqual(dashboard.platforms.find((item) => item.platform === 'instagram'), {
-    platform: 'instagram', views: 0, likes: 0, comments: 0, shares: 0, clicks: 0, capturedAt: null,
+    platform: 'instagram', capturedAt: null,
   });
 });

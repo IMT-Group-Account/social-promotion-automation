@@ -9,6 +9,7 @@ import type { ConnectedSocialAccount, OAuthAuthorizationState, SocialAccountCred
 
 process.env.OAUTH_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 process.env.OAUTH_TOKEN_ENCRYPTION_KEY_VERSION = 'test-v1';
+process.env.OAUTH_TOKEN_ENCRYPTION_KEYS = JSON.stringify({ 'test-v1': process.env.OAUTH_TOKEN_ENCRYPTION_KEY });
 
 class MemoryOAuthRepository implements OAuthAccountRepository {
   readonly states = new Map<string, OAuthAuthorizationState>();
@@ -38,12 +39,14 @@ class TestLinkedInProvider implements OAuthProvider {
   readonly platform = 'linkedin' as const;
   readonly callbackRoute = 'linkedin' as const;
   codeChallenge: string | undefined;
+  exchangeCalls = 0;
 
   createAuthorizationUrl(input: { state: string; codeChallenge: string }): URL {
     this.codeChallenge = input.codeChallenge;
     return new URL(`https://oauth.example/authorize?state=${encodeURIComponent(input.state)}`);
   }
   async exchangeCode(input: { code: string; codeVerifier: string }) {
+    this.exchangeCalls += 1;
     assert.equal(input.code, 'authorization-code');
     assert.equal(createHash('sha256').update(input.codeVerifier).digest('base64url'), this.codeChallenge);
     return { accessToken: 'access-token-secret', refreshToken: 'refresh-token-secret', expiresAt: new Date('2026-08-22T00:00:00Z'), scopes: ['w_member_social'] };
@@ -67,7 +70,7 @@ class TestThreadsProvider implements OAuthProvider {
   async fetchIdentity() { return { platformAccountId: '12345678901234567', accountName: 'campaign.foundation' }; }
 }
 
-test('OAuth callback consumes state once and stores only encrypted server-side tokens', async () => {
+test('OAuth state replay is rejected before a second provider code exchange and tokens remain encrypted', async () => {
   const repository = new MemoryOAuthRepository();
   const provider = new TestLinkedInProvider();
   const service = new OauthService(repository, [provider], new TokenService());
@@ -83,6 +86,7 @@ test('OAuth callback consumes state once and stores only encrypted server-side t
   assert.equal(repository.credential.accessTokenEncrypted.includes('access-token-secret'), false);
   assert.equal(new TokenService().decrypt(repository.credential.accessTokenEncrypted), 'access-token-secret');
   await assert.rejects(() => service.completeCallback('linkedin', { state, code: 'authorization-code' }), /invalid, expired, or already used/);
+  assert.equal(provider.exchangeCalls, 1);
 });
 
 test('token encryption is authenticated and never deterministic', () => {

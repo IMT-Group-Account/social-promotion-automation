@@ -1,8 +1,12 @@
 # Frontend Backend API contract
 
-Frontend never calls LinkedIn, Meta, Threads, X, Redis, or storage-provider APIs directly. It calls only this NestJS API with its application session; the server verifies ownership and keeps every provider token server-side.
+Frontend never calls LinkedIn, Meta, Threads, X, Redis, or storage-provider APIs directly. It calls only this NestJS API with `Authorization: Bearer <our-service-jwt>`; the global `ServiceJwtAuthGuard` verifies the service JWT and derives `req.user.id` from its `sub` claim before the server verifies ownership and keeps every provider token server-side.
 
-All routes return `{ "data": ..., "error": null, "meta": {} }` on success. A missing authenticated user context returns `401`; resources owned by a different user are returned as `404`.
+All user API routes return `{ "data": ..., "error": null, "meta": {} }` on success. Missing, malformed, expired, incorrectly issued/audienced, or invalidly signed Bearer tokens return `401`; resources owned by a different user are returned as `404`. OAuth callbacks, `/api/health`, and documented Kakao inbound routes are provider/public exceptions and do not use a browser JWT.
+
+## Request validation
+
+Nest applies a global `ValidationPipe` with `whitelist`, `forbidNonWhitelisted`, and `transform` enabled. Every JSON request body uses a decorated DTO class; missing or invalid fields and unexpected properties are rejected with `400` before controller or service logic runs. Provider callback query parameters remain provider-specific and are validated by the OAuth flow rather than being silently transformed into an application DTO.
 
 ## Campaigns
 
@@ -58,6 +62,8 @@ The authenticated server derives `ownerId`; clients must not submit it. The serv
 | GET | `/api/posts/:id/analytics` | Latest server-collected metrics by platform |
 
 Individual adapter outcomes live on their corresponding job fields: `publishedAt`, `remotePostId`, `remotePostUrl`, `errorCode`, `errorMessage`, `retryCount`, and `nextRetryAt`. `publish` and `schedule` only request backend queue work; they never expose or call an SNS API from the browser.
+
+Provider-adapter operations use only a persisted `remotePostId` together with its `socialAccountId`; the local post ID is never a provider API identifier. Direct analytics lookup, when enabled, therefore uses `GET /api/analytics/:platform/:socialAccountId/:remotePostId`.
 
 ## Integrations
 

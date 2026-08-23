@@ -22,7 +22,7 @@ users
 | `post_media` | Post의 이미지/영상 URL | `post_id → posts.id` |
 | `social_publish_jobs` | 계정별 독립 게시 상태/재시도 | `post_id → posts.id`, `account_id → social_accounts.id` |
 | `social_posts` | 성공한 원격 SNS 게시물 | `social_publish_job_id → social_publish_jobs.id` (1:1) |
-| `social_metrics` | 원격 게시물의 시계열 metric | `social_post_id → social_posts.id` (1:N) |
+| `social_metrics` | 원격 게시물의 시계열 metric | `social_post_id → social_posts.id` (1:N), optional standard metrics + provider-native `raw_metrics` JSONB |
 | `oauth_states` | hash된 OAuth state와 PKCE verifier ciphertext | `user_id → users.id` |
 | `audit_logs` | 민감값 없는 보안/운영 감사 기록 | `user_id → users.id` |
 
@@ -32,4 +32,4 @@ users
 
 `011_postgresql_canonical_social_model.sql`은 먼저 기존 user ID를 `users`에 backfill하고, FK를 추가한 뒤 `oauth_authorization_states`를 `oauth_states`로 rename한다. 기존 analytics snapshot은 `social_posts`와 `social_metrics`로 복사한 후 이전 snapshot table을 제거한다. 따라서 migration runner는 이 파일을 transaction으로 적용해야 하며, 실행 전 PostgreSQL backup과 staging 검증이 필요하다.
 
-`social_posts`와 `social_metrics`에 맞춰 runtime repository SQL도 함께 전환됐다. 이전 앱 버전이 `oauth_authorization_states` 또는 `social_post_analytics_snapshots`를 직접 조회한 채로 실행되면 migration 이후 실패하므로, API/Worker 배포와 migration을 같은 release로 진행한다.
+`social_posts`와 `social_metrics`에 맞춰 runtime repository SQL도 함께 전환됐다. Migration `012_social_metrics_optional_platform_metrics.sql` makes legacy fixed metrics nullable, adds `impressions`, `reach`, `reposts`, and preserves provider-specific numeric fields in `raw_metrics` JSONB. API/worker/scheduler must be deployed with migration 012: older runtime writes fixed non-null metrics and cannot preserve provider-native fields.

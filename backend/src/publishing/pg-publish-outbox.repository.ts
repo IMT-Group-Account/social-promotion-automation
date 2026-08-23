@@ -1,5 +1,5 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { type Post, type SocialPlatform, type SocialPublishJob } from '../posts/post.entity';
 import type { PublishExecution } from './publishing.service';
 import type { PublishOutboxRepository, ClaimedPublishJob } from './publish-outbox.repository';
@@ -10,7 +10,10 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
   private pool: Pool | undefined;
 
   async claimOutbox(limit: number, leaseMs: number): Promise<readonly PublishQueueRecord[]> {
-    const result = await this.db().query<{ publish_job_id: string; queue_job_id: string; scheduled_at: Date }>(
+    const result = await this.db().query<{
+      publish_job_id: string; queue_job_id: string; scheduled_at: Date; campaign_id: string; post_id: string;
+      platform: SocialPlatform; account_id: string; remote_post_id: string | null;
+    }>(
       `WITH candidates AS (
          SELECT publish_job_id
          FROM social_publish_queue_outbox
@@ -25,11 +28,18 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
            dispatch_attempt_count = dispatch_attempt_count + 1,
            updated_at = now()
        FROM candidates
+       JOIN social_publish_jobs AS job ON job.id = candidates.publish_job_id
+       JOIN posts AS post ON post.id = job.post_id
        WHERE outbox.publish_job_id = candidates.publish_job_id
-       RETURNING outbox.publish_job_id, outbox.queue_job_id, outbox.scheduled_at`,
+       RETURNING outbox.publish_job_id, outbox.queue_job_id, outbox.scheduled_at,
+                 post.campaign_id, job.post_id, job.platform, job.account_id, job.remote_post_id`,
       [limit, leaseMs],
     );
-    return result.rows.map((row) => ({ publishJobId: row.publish_job_id, queueJobId: row.queue_job_id, scheduledAt: row.scheduled_at }));
+    return result.rows.map((row) => ({
+      publishJobId: row.publish_job_id, queueJobId: row.queue_job_id, scheduledAt: row.scheduled_at,
+      campaignId: row.campaign_id, postId: row.post_id, platform: row.platform,
+      socialAccountId: row.account_id, remotePostId: row.remote_post_id,
+    }));
   }
 
   async markOutboxEnqueued(record: PublishQueueRecord): Promise<void> {
@@ -56,12 +66,12 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
       await client.query('BEGIN');
       const claimed = await client.query<JobRow>(
         `UPDATE social_publish_jobs
-         SET status = 'processing', lease_expires_at = now() + ($2::bigint * interval '1 millisecond'), next_retry_at = NULL, updated_at = now()
+         SET status = 'claimed', lease_expires_at = now() + ($2::bigint * interval '1 millisecond'), next_retry_at = NULL, updated_at = now()
          WHERE id = $1
            AND scheduled_at <= now()
-           AND (status = 'waiting' OR (status = 'retrying' AND next_retry_at <= now()) OR (status = 'processing' AND lease_expires_at <= now()))
+           AND (status = 'waiting' OR (status = 'retrying' AND next_retry_at <= now()) OR (status = 'claimed' AND lease_expires_at <= now()) OR (status = 'remote_requesting' AND next_retry_at <= now()))
          RETURNING id, post_id, platform, account_id, status, scheduled_at, published_at, remote_post_id, remote_post_url,
-                   error_code, error_message, retry_count, lease_expires_at, next_retry_at`,
+                   error_code, error_message, retry_count, lease_expires_at, next_retry_at, remote_request_key, remote_request_started_at`,
         [jobId, leaseMs],
       );
       const jobRow = claimed.rows[0];
@@ -83,6 +93,58 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
     } finally { client.release(); }
   }
 
+  async markRemoteRequesting(jobId: string, idempotencyKey: string, leaseMs: number): Promise<SocialPublishJob> {
+    const result = await this.db().query<JobRow>(
+      `UPDATE social_publish_jobs
+       SET status = 'remote_requesting', remote_request_key = COALESCE(remote_request_key, $2),
+           remote_request_started_at = COALESCE(remote_request_started_at, now()),
+           lease_expires_at = now() + ($3::bigint * interval '1 millisecond'), next_retry_at = NULL, updated_at = now()
+       WHERE id = $1 AND status = 'claimed' AND (remote_request_key IS NULL OR remote_request_key = $2)
+       RETURNING id, post_id, platform, account_id, status, scheduled_at, published_at, remote_post_id, remote_post_url,
+                 error_code, error_message, retry_count, lease_expires_at, next_retry_at, remote_request_key, remote_request_started_at`,
+      [jobId, idempotencyKey, leaseMs],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error(`Publish job ${jobId} could not enter remote_requesting.`);
+    return toJob(row);
+  }
+
+  async confirmRemotePublication(job: SocialPublishJob): Promise<SocialPublishJob> {
+    const result = await this.db().query<JobRow>(
+      `UPDATE social_publish_jobs
+       SET status = 'remote_confirmed', published_at = $2, remote_post_id = $3, remote_post_url = $4,
+           error_code = NULL, error_message = NULL, lease_expires_at = NULL, next_retry_at = NULL, updated_at = now()
+       WHERE id = $1 AND status = 'remote_requesting'
+       RETURNING id, post_id, platform, account_id, status, scheduled_at, published_at, remote_post_id, remote_post_url,
+                 error_code, error_message, retry_count, lease_expires_at, next_retry_at, remote_request_key, remote_request_started_at`,
+      [job.id, job.publishedAt, job.remotePostId, job.remotePostUrl],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error(`Publish job ${job.id} could not confirm its remote publication.`);
+    return toJob(row);
+  }
+
+  async recordAmbiguousRemoteOutcome(job: SocialPublishJob, retryPending: boolean, nextRetryAt: Date | null): Promise<void> {
+    const client = await this.db().connect();
+    try {
+      await client.query('BEGIN');
+      const update = await client.query<{ post_id: string; platform: SocialPlatform; error_code: string; error_message: string; retry_count: number }>(
+        `UPDATE social_publish_jobs
+         SET status = $2, error_code = 'AMBIGUOUS_REMOTE_OUTCOME', error_message = $3, retry_count = $4,
+             next_retry_at = $5, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $1 AND status IN ('claimed', 'remote_requesting')
+         RETURNING post_id, platform, error_code, error_message, retry_count`,
+        [job.id, retryPending ? 'remote_requesting' : 'failed', job.errorMessage ?? 'Remote publish outcome could not be confirmed.', job.retryCount, nextRetryAt],
+      );
+      const row = update.rows[0];
+      if (row && !retryPending) await this.insertFinalFailureAudit(client, job.id, row);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+  }
+
   async saveExecution(execution: PublishExecution, retryPending: boolean, nextRetryAt: Date | null): Promise<void> {
     const job = execution.job;
     if (execution.ok) {
@@ -92,8 +154,8 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
         const update = await client.query<{ post_id: string; account_id: string; platform: SocialPlatform; remote_post_id: string; remote_post_url: string | null; published_at: Date }>(
           `UPDATE social_publish_jobs
            SET status = 'published', published_at = $2, remote_post_id = $3, remote_post_url = $4,
-               error_code = NULL, error_message = NULL, lease_expires_at = NULL, updated_at = now()
-           WHERE id = $1 AND status = 'processing'
+               error_code = NULL, error_message = NULL, lease_expires_at = NULL, next_retry_at = NULL, updated_at = now()
+           WHERE id = $1 AND status = 'remote_confirmed'
            RETURNING post_id, account_id, platform, remote_post_id, remote_post_url, published_at`,
           [job.id, job.publishedAt, job.remotePostId, job.remotePostUrl],
         );
@@ -128,28 +190,13 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
       const update = await client.query<{ post_id: string; platform: SocialPlatform; error_code: string; error_message: string; retry_count: number }>(
         `UPDATE social_publish_jobs
          SET status = $2, error_code = $3, error_message = $4, retry_count = $5,
-             next_retry_at = $6, lease_expires_at = NULL, updated_at = now()
-         WHERE id = $1 AND status = 'processing'
+             next_retry_at = $6, lease_expires_at = NULL, remote_request_key = NULL, remote_request_started_at = NULL, updated_at = now()
+         WHERE id = $1 AND status IN ('claimed', 'remote_requesting')
          RETURNING post_id, platform, error_code, error_message, retry_count`,
         [job.id, retryPending ? 'retrying' : 'failed', job.errorCode ?? 'UNKNOWN_ERROR', job.errorMessage ?? 'Publishing failed.', job.retryCount, nextRetryAt],
       );
       const row = update.rows[0];
-      if (row && !retryPending) {
-        await client.query(
-          `INSERT INTO social_publish_failure_alerts (
-             social_publish_job_id, post_id, platform, error_code, error_message, retry_count
-           ) VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (social_publish_job_id) DO NOTHING`,
-          [job.id, row.post_id, row.platform, row.error_code, row.error_message, row.retry_count],
-        );
-        await client.query(
-          `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
-           SELECT owner_id, 'social_publish_job.failed', 'social_publish_job', $1,
-                  jsonb_build_object('platform', $2, 'errorCode', $3, 'retryCount', $4)
-           FROM posts WHERE id = $5`,
-          [job.id, row.platform, row.error_code, row.retry_count, row.post_id],
-        );
-      }
+      if (row && !retryPending) await this.insertFinalFailureAudit(client, job.id, row);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -164,12 +211,33 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
     this.pool = new Pool({ connectionString, max: 5 });
     return this.pool;
   }
+
+  private async insertFinalFailureAudit(
+    client: PoolClient, jobId: string,
+    row: { post_id: string; platform: SocialPlatform; error_code: string; error_message: string; retry_count: number },
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO social_publish_failure_alerts (
+         social_publish_job_id, post_id, platform, error_code, error_message, retry_count
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (social_publish_job_id) DO NOTHING`,
+      [jobId, row.post_id, row.platform, row.error_code, row.error_message, row.retry_count],
+    );
+    await client.query(
+      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
+       SELECT owner_id, 'social_publish_job.failed', 'social_publish_job', $1,
+              jsonb_build_object('platform', $2, 'errorCode', $3, 'retryCount', $4)
+       FROM posts WHERE id = $5`,
+      [jobId, row.platform, row.error_code, row.retry_count, row.post_id],
+    );
+  }
 }
 
 interface JobRow {
   id: string; post_id: string; platform: SocialPlatform; account_id: string; status: SocialPublishJob['status']; scheduled_at: Date;
   published_at: Date | null; remote_post_id: string | null; remote_post_url: string | null; error_code: string | null;
   error_message: string | null; retry_count: number; lease_expires_at: Date | null; next_retry_at: Date | null;
+  remote_request_key: string | null; remote_request_started_at: Date | null;
 }
 interface PostRow { id: string; campaign_id: string; owner_id: string; title: string; body: string; destination_url: string | null; scheduled_at: Date; status: Post['status']; }
 interface MediaRow { media_type: 'image' | 'video'; storage_url: string; }
@@ -177,7 +245,8 @@ interface MediaRow { media_type: 'image' | 'video'; storage_url: string; }
 function toJob(row: JobRow): SocialPublishJob {
   return { id: row.id, postId: row.post_id, platform: row.platform, accountId: row.account_id, status: row.status, scheduledAt: row.scheduled_at,
     publishedAt: row.published_at, remotePostId: row.remote_post_id, remotePostUrl: row.remote_post_url, errorCode: row.error_code,
-    errorMessage: row.error_message, retryCount: row.retry_count, leaseExpiresAt: row.lease_expires_at, nextRetryAt: row.next_retry_at };
+    errorMessage: row.error_message, retryCount: row.retry_count, leaseExpiresAt: row.lease_expires_at, nextRetryAt: row.next_retry_at,
+    remoteRequestKey: row.remote_request_key, remoteRequestStartedAt: row.remote_request_started_at };
 }
 function toPost(row: PostRow, media: readonly MediaRow[]): Post {
   return { id: row.id, campaignId: row.campaign_id, ownerId: row.owner_id, scheduledAt: row.scheduled_at, status: row.status,

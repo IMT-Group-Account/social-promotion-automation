@@ -21,6 +21,7 @@ export class PostService {
       id: randomUUID(), postId: post.id, platform: target.platform, accountId: target.accountId,
       status: 'waiting', scheduledAt, publishedAt: null, remotePostId: null, remotePostUrl: null,
       errorCode: null, errorMessage: null, retryCount: 0, leaseExpiresAt: null, nextRetryAt: null,
+      remoteRequestKey: null, remoteRequestStartedAt: null,
     }));
     this.repository.save(post, jobs);
     return { post, jobs };
@@ -31,7 +32,7 @@ export class PostService {
     if (jobs.every((job) => job.status === 'published')) return 'completed';
     if (jobs.every((job) => job.status === 'failed' || job.status === 'cancelled')) return 'failed';
     if (jobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) return 'partially_failed';
-    if (jobs.some((job) => job.status === 'processing')) return 'publishing';
+    if (jobs.some((job) => job.status === 'claimed' || job.status === 'remote_requesting' || job.status === 'remote_confirmed')) return 'publishing';
     return 'scheduled';
   }
 
@@ -46,8 +47,8 @@ export class PostService {
     const scheduledAt = new Date(scheduledAtInput);
     if (Number.isNaN(scheduledAt.valueOf())) throw new TypeError('scheduledAt must be ISO-8601.');
     if (scheduledAt <= new Date()) throw new RangeError('scheduledAt must be in the future.');
-    if (jobs.some((job) => job.status === 'published' || job.status === 'processing')) {
-      throw new RangeError('Published or processing jobs cannot be rescheduled.');
+    if (jobs.some((job) => job.status === 'published' || job.status === 'claimed' || job.status === 'remote_requesting' || job.status === 'remote_confirmed' || job.remoteRequestKey)) {
+      throw new RangeError('Published, remotely requested, or processing jobs cannot be rescheduled before reconciliation.');
     }
     const updatedPost: Post = { ...post, scheduledAt, status: 'scheduled' };
     const updatedJobs = jobs.map((job) => job.status === 'cancelled' ? job : {

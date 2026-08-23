@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Headers, Param, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
-import type { KakaoChannelInboundSource, KakaoConsultationStatus } from './kakao-channel.entity';
+import { Body, Controller, Get, Headers, Param, Post, Req, Res } from '@nestjs/common';
+import type { AuthenticatedRequest } from '../auth/authenticated-request';
+import { PublicRoute } from '../auth/public-route.decorator';
+import { CreateKakaoChannelDto, CreateKakaoChannelEntryDto, KakaoConsultationEventDto } from './kakao-channel.dto';
 import { KakaoChannelService } from './kakao-channel.service';
 
-interface AuthenticatedRequest { user?: { id?: string }; }
 interface RedirectResponse { redirect(url: string): void; }
 
 @Controller('kakao-channel')
@@ -10,24 +11,26 @@ export class KakaoChannelController {
   constructor(private readonly channels: KakaoChannelService) {}
 
   @Post('channels')
-  async create(@Req() request: AuthenticatedRequest, @Body() input: { publicId: string; name: string; consultationUrl: string }) {
-    return { data: await this.channels.createChannel(this.ownerId(request), input), error: null, meta: {} };
+  async create(@Req() request: AuthenticatedRequest, @Body() input: CreateKakaoChannelDto) {
+    return { data: await this.channels.createChannel(request.user!.id, input), error: null, meta: {} };
   }
 
   @Post('entries')
-  async createEntry(@Req() request: AuthenticatedRequest, @Body() input: { channelId: string; campaignId?: string; source: KakaoChannelInboundSource }) {
-    return { data: await this.channels.createEntry(this.ownerId(request), input), error: null, meta: {} };
+  async createEntry(@Req() request: AuthenticatedRequest, @Body() input: CreateKakaoChannelEntryDto) {
+    return { data: await this.channels.createEntry(request.user!.id, input), error: null, meta: {} };
   }
 
   @Get('entry/:trackingCode')
+  @PublicRoute()
   async openEntry(@Param('trackingCode') trackingCode: string, @Res() response: RedirectResponse): Promise<void> {
     response.redirect(await this.channels.openEntry(trackingCode));
   }
 
   @Post('consultations/events')
+  @PublicRoute()
   async consultationEvent(
     @Headers('x-kakao-channel-integration-key') integrationKey: string | undefined,
-    @Body() input: { channelId: string; inboundTrackingCode?: string; externalConversationRef: string; status: KakaoConsultationStatus },
+    @Body() input: KakaoConsultationEventDto,
   ) {
     await this.channels.recordConsultation(integrationKey, input);
     return { data: { accepted: true }, error: null, meta: {} };
@@ -35,12 +38,6 @@ export class KakaoChannelController {
 
   @Get('channels/:channelId/funnel')
   async funnel(@Req() request: AuthenticatedRequest, @Param('channelId') channelId: string) {
-    return { data: await this.channels.funnel(this.ownerId(request), channelId), error: null, meta: {} };
-  }
-
-  private ownerId(request: AuthenticatedRequest): string {
-    const ownerId = request.user?.id;
-    if (!ownerId) throw new UnauthorizedException('An authenticated owner context is required.');
-    return ownerId;
+    return { data: await this.channels.funnel(request.user!.id, channelId), error: null, meta: {} };
   }
 }

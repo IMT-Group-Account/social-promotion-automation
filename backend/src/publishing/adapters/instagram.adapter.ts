@@ -1,6 +1,7 @@
 import { ForbiddenException, Inject, Injectable, NotImplementedException, ServiceUnavailableException } from '@nestjs/common';
 import { INSTAGRAM_CREDENTIAL_RESOLVER, type InstagramCredentialResolver, type InstagramPublishingCredential } from './instagram-credential.service';
 import { INSTAGRAM_HTTP_CLIENT, type InstagramHttpClient } from './instagram-http.client';
+import { assertAnalyticsHaveValues, numericProviderMetrics } from './analytics-metrics';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from './social-adapter.interface';
 
 @Injectable()
@@ -55,30 +56,34 @@ export class InstagramAdapter implements SocialAdapter {
     return { remotePostId, publishedAt: new Date() };
   }
 
-  async getPost(postId: string, socialAccountId?: string): Promise<SocialPostResult> {
+  async getPost(remotePostId: string, socialAccountId: string): Promise<SocialPostResult> {
     const credential = await this.readCredential(socialAccountId);
-    const response = await this.http.request({ method: 'GET', url: this.objectUrl(postId), accessToken: credential.accessToken, parameters: { fields: 'id,permalink,media_type' } });
+    const response = await this.http.request({ method: 'GET', url: this.objectUrl(remotePostId), accessToken: credential.accessToken, parameters: { fields: 'id,permalink,media_type' } });
     const payload = this.object(response.body);
-    return { remotePostId: this.string(payload.id) ?? postId, remotePostUrl: this.string(payload.permalink) ?? undefined, status: 'published' };
+    return { remotePostId: this.string(payload.id) ?? remotePostId, remotePostUrl: this.string(payload.permalink) ?? undefined, status: 'published' };
   }
 
-  async getAnalytics(postId: string, socialAccountId?: string): Promise<PostAnalytics> {
+  async getAnalytics(remotePostId: string, socialAccountId: string): Promise<PostAnalytics> {
     const credential = await this.readCredential(socialAccountId);
     const template = process.env.INSTAGRAM_ANALYTICS_URL;
     if (!template) throw new NotImplementedException('INSTAGRAM_ANALYTICS_URL configuration is required.');
-    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(postId)), accessToken: credential.accessToken });
+    const response = await this.http.request({ method: 'GET', url: template.replace('{postId}', encodeURIComponent(remotePostId)), accessToken: credential.accessToken });
     const payload = this.object(response.body);
-    const views = this.number(payload.views ?? payload.impressions ?? payload.reach);
-    if (views === null) throw new ServiceUnavailableException('Instagram analytics response lacks view metrics.');
-    return {
-      views, likes: this.number(payload.likes) ?? 0, comments: this.number(payload.comments) ?? 0,
-      shares: this.number(payload.shares) ?? 0, clicks: this.number(payload.clicks) ?? 0, capturedAt: new Date(),
-    };
+    return assertAnalyticsHaveValues({
+      impressions: this.number(payload.impressions) ?? undefined,
+      reach: this.number(payload.reach) ?? undefined,
+      views: this.number(payload.views) ?? undefined,
+      likes: this.number(payload.likes) ?? undefined,
+      comments: this.number(payload.comments) ?? undefined,
+      shares: this.number(payload.shares) ?? undefined,
+      clicks: this.number(payload.clicks) ?? undefined,
+      rawMetrics: numericProviderMetrics(payload), capturedAt: new Date(),
+    }, 'Instagram');
   }
 
   private async writeCredential(socialAccountId: string): Promise<InstagramPublishingCredential> { const credential = await this.resolve(socialAccountId); this.requireScope(credential, 'instagram_content_publish'); return credential; }
-  private async readCredential(socialAccountId: string | undefined): Promise<InstagramPublishingCredential> { const credential = await this.resolve(socialAccountId); this.requireScope(credential, 'instagram_basic'); return credential; }
-  private async resolve(socialAccountId: string | undefined): Promise<InstagramPublishingCredential> { if (!socialAccountId) throw new ForbiddenException('Instagram account context is required.'); return this.credentials.resolve(socialAccountId); }
+  private async readCredential(socialAccountId: string): Promise<InstagramPublishingCredential> { const credential = await this.resolve(socialAccountId); this.requireScope(credential, 'instagram_basic'); return credential; }
+  private async resolve(socialAccountId: string): Promise<InstagramPublishingCredential> { if (!socialAccountId) throw new ForbiddenException('Instagram account context is required.'); return this.credentials.resolve(socialAccountId); }
   private requireScope(credential: InstagramPublishingCredential, scope: string): void { if (!credential.scope.has(scope)) throw new ForbiddenException(`Instagram account is missing required scope: ${scope}.`); }
   private baseUrl(): string { const value = process.env.INSTAGRAM_GRAPH_API_BASE_URL; if (!value) throw new ServiceUnavailableException('INSTAGRAM_GRAPH_API_BASE_URL is not configured.'); const url = new URL(value); if (url.protocol !== 'https:') throw new ServiceUnavailableException('INSTAGRAM_GRAPH_API_BASE_URL must use HTTPS.'); return url.toString().replace(/\/$/, ''); }
   private edgeUrl(id: string, edge: string): string { return `${this.baseUrl()}/${encodeURIComponent(id)}/${edge}`; }

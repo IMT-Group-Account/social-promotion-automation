@@ -15,7 +15,7 @@ One `post` owns its editorial content and schedule. Each selected social account
 - `backend/src/analytics`: per-job analytics collection leases, normalized metric snapshots, and campaign dashboard aggregation.
 - `backend/src/publishing/formatters`: deterministic LinkedIn/Instagram/Facebook/Threads/X presentation rules and an AI-ready platform-content contract.
 - `backend/src/auth`, `campaigns`, `analytics`, `scheduler`, `media`: NestJS modules matching the backend responsibilities.
-- `backend/src/auth`: Authorization Code + PKCE, one-time CSRF state, LinkedIn/Facebook/Threads/X provider registry, AES-256-GCM token encryption, and PostgreSQL credential repository.
+- `backend/src/auth`: service-JWT Bearer authentication guard, Authorization Code + PKCE, one-time CSRF state, LinkedIn/Facebook/Threads/X provider registry, AES-256-GCM token encryption, and PostgreSQL credential repository.
 - `backend/test`: contract tests for independent job failure and retry behavior.
 - `frontend`: Next.js 관리자 화면. Backend API만 호출해 캠페인 작성, SNS 선택, 예약, 결과 상태를 표시합니다.
 - `docs/data-model.md`: data flow and operational status semantics.
@@ -34,7 +34,7 @@ npm.cmd run test
 npm.cmd run build
 ```
 
-`build` compiles TypeScript and validates that the SQL migration contains the required table and isolation constraints. It does not apply a database migration. OAuth uses PostgreSQL when `DATABASE_URL` is configured. Frontend calls only `/api/campaigns`, `/api/posts`, and `/api/integrations`; callback routes are provider-facing. The current process-local post repository and unconfigured publishing adapters are deliberate fail-closed development boundaries until the upstream application authentication and PostgreSQL post repository are connected.
+`build` compiles TypeScript and validates that the SQL migration contains the required table and isolation constraints. It does not apply a database migration. OAuth uses PostgreSQL when `DATABASE_URL` is configured. Every user API route requires `Authorization: Bearer <our-service-jwt>`; NestJS verifies its HS256 signature plus `iss`, `aud`, `exp`, and `sub` before mapping `sub` to `req.user.id`. Set the server-only `SERVICE_JWT_SECRET`, `SERVICE_JWT_ISSUER`, and `SERVICE_JWT_AUDIENCE` variables before starting the API. Frontend calls only `/api/campaigns`, `/api/posts`, and `/api/integrations`; callback routes are provider-facing. The current process-local post repository and unconfigured publishing adapters are deliberate fail-closed development boundaries until the upstream application authentication and PostgreSQL post repository are connected.
 
 Scheduled publishing uses a separate worker after migration `009_bullmq_publish_outbox.sql` has been applied. Set server-only `REDIS_URL` and `PUBLISH_WORKER_ENABLED=true`, then run `npm.cmd run start:worker`; see [docs/publishing-queue.md](docs/publishing-queue.md). Do not put Redis, OAuth, or SNS tokens in frontend variables or browser storage.
 

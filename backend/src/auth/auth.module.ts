@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { FacebookOAuthProvider } from './facebook-oauth.provider';
 import { LinkedInOAuthProvider } from './linkedin-oauth.provider';
 import { OAUTH_ACCOUNT_REPOSITORY } from './oauth-account.repository';
@@ -10,11 +11,14 @@ import { PgOAuthAccountRepository } from './pg-oauth-account.repository';
 import { TokenService } from './token.service';
 import { ThreadsOAuthProvider } from './threads-oauth.provider';
 import { XOAuthProvider } from './x-oauth.provider';
+import { ServiceJwtAuthGuard } from './service-jwt-auth.guard';
+import { ServiceJwtVerifier } from './service-jwt-verifier.service';
 
 @Module({
   controllers: [OauthController, IntegrationsController],
   providers: [
-    OauthService, TokenService, PgOAuthAccountRepository, LinkedInOAuthProvider, FacebookOAuthProvider, ThreadsOAuthProvider, XOAuthProvider,
+    OauthService, TokenService, ServiceJwtVerifier, PgOAuthAccountRepository, LinkedInOAuthProvider, FacebookOAuthProvider, ThreadsOAuthProvider, XOAuthProvider,
+    { provide: APP_GUARD, useClass: ServiceJwtAuthGuard },
     { provide: OAUTH_ACCOUNT_REPOSITORY, useExisting: PgOAuthAccountRepository },
     {
       provide: OAUTH_PROVIDERS,
