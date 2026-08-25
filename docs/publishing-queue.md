@@ -1,22 +1,29 @@
-# Redis + BullMQ 예약 발행
+# Redis and BullMQ scheduled publishing
 
-예약 발행에는 `setTimeout()`을 사용하지 않는다. 하나의 `social_publish_jobs` 행은 하나의 BullMQ delayed job이며, LinkedIn·Facebook·Instagram·Threads·X는 각각 별도로 처리된다.
+Scheduled publishing does not use process-local `setTimeout()`. Each selected
+social account has one `social_publish_jobs` row and one deterministic BullMQ
+job. A failure for one platform never changes a sibling platform's job.
 
 ```text
 PostgreSQL social_publish_jobs INSERT
-  -> trigger가 social_publish_queue_outbox 행 생성 (같은 DB 트랜잭션)
-  -> 별도 publish worker가 outbox를 claim
-  -> Redis/BullMQ delayed job (jobId: publish-<publish-job-uuid>)
-  -> 예정 시각에 worker가 해당 job 하나만 lease
-  -> Adapter 호출
-  -> 그 job 행만 published / retrying / failed로 저장
+  -> transactional social_publish_queue_outbox row
+  -> publish worker claims the outbox row
+  -> Redis/BullMQ delayed job (publish-<publish-job-uuid>)
+  -> worker leases exactly one publish job
+  -> provider adapter call
+  -> that job alone is persisted as published, retrying, or failed
 ```
 
-outbox의 deterministic BullMQ job ID는 등록 재시도 중에도 중복 delayed job 생성을 막는다. `scheduled_at`은 UTC `timestamptz`로 저장하며, BullMQ delay는 enqueue 시점에 계산한다. Worker 부하나 Redis 장애 때문에 정확히 그 밀리초에 실행된다는 보장은 없으므로 운영 대시보드에서는 예정 시각과 실제 `published_at`을 모두 보여야 한다.
+The deterministic BullMQ job ID prevents duplicate delayed jobs during outbox
+retry. `scheduled_at` is UTC `timestamptz`; the queue delay is calculated at
+enqueue time. Operator dashboards must show both scheduled and actual publish
+time because worker load and Redis availability prevent exact-time guarantees.
 
-## 실행
+## Runtime
 
-PostgreSQL migration `009_bullmq_publish_outbox.sql`을 일반 migration 절차로 먼저 적용한 후, HTTP API와 별도 프로세스로 worker를 실행한다.
+Apply migration `009_bullmq_publish_outbox.sql` through the production migration
+procedure before starting the worker. The API never starts publishing merely by
+being online.
 
 ```powershell
 $env:PUBLISH_WORKER_ENABLED = 'true'
@@ -25,15 +32,38 @@ npm.cmd run build
 npm.cmd run start:worker
 ```
 
-`PUBLISH_WORKER_ENABLED`의 기본값은 `false`다. API 프로세스가 시작됐다는 사실만으로 외부 SNS 발행이 시작되지는 않는다. Redis, DB, OAuth provider 권한이 있는 staging에서 먼저 확인하고, 실제 계정 발행은 운영 승인 범위에서만 수행한다.
+`PUBLISH_WORKER_ENABLED` defaults to `false`. Exercise the worker first in a
+staging environment with PostgreSQL, Redis, and approved provider credentials.
+Actual provider publication needs separate operational authorization.
 
-## 실패 및 재시도
+## Durable state machine
 
-- 상태는 `waiting` → `processing` → `published`이며, 재시도 대기 중에는 `retrying`이다. 사용자가 취소하면 `cancelled`, 최종 실패하면 `failed`가 된다.
-- 429, 공급자 5xx, 네트워크 오류는 첫 실패 후 30초, 두 번째 후 2분, 세 번째 후 10분 뒤 재시도한다. 네 번째 실패는 최종 실패다.
-- 401 토큰 만료와 403 권한 오류, 기타 4xx 요청 오류는 재시도하지 않고 즉시 `failed`로 전환한다.
-- 최종 실패는 `social_publish_failure_alerts` outbox에 같은 DB 트랜잭션으로 기록되어 관리자 알림 전달 대상이 된다.
-- 실패한 X 작업은 그 X 행만 `retrying` 또는 `failed`로 바꾼다. 다른 플랫폼 job은 업데이트하지 않는다.
-- DB lease는 중복 BullMQ delivery를 무해하게 만들고, 만료된 lease는 다음 delivery가 다시 claim할 수 있다. 외부 API 호출 성공 직후 프로세스가 죽는 경계에서는 공급자별 멱등성 키/조회 기반 조정이 추가로 필요하다.
+```text
+waiting/retrying
+  -> claimed
+  -> remote_requesting (remote_request_key persisted before Adapter.publish)
+  -> remote_confirmed (remote post reference persisted)
+  -> published
+```
 
-환경 변수는 [`.env.example`](../.env.example)에 정리되어 있다.
+`cancelled` is user-initiated and `failed` is terminal. A retryable failure
+uses 30 seconds, 2 minutes, then 10 minutes; the fourth failure is terminal.
+Authentication/authorization provider errors and other permanent 4xx outcomes
+are terminal. A terminal failure creates a `social_publish_failure_alerts`
+outbox record in the same transaction.
+
+Before any irreversible provider write, the worker persists a deterministic
+`remote_request_key`. For an unknown network/5xx outcome it reconciles before
+repeating a write; when reconciliation is unsupported it remains fail-closed
+with `AMBIGUOUS_REMOTE_OUTCOME` rather than publishing again.
+
+## Deployment compatibility
+
+Worker status constraints, transition semantics, and request-key fields are
+deployment compatibility changes. Before applying such a migration in
+production, follow the required scheduler/worker quiesce, backup, migration,
+API, worker, scheduler, and health-check order in
+[deployment.md](deployment.md). An old worker must never run against a new
+state-machine schema.
+
+Environment settings are documented in [`.env.example`](../.env.example).

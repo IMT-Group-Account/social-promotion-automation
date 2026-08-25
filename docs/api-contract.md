@@ -59,11 +59,20 @@ The authenticated server derives `ownerId`; clients must not submit it. The serv
 | POST | `/api/posts/:id/publish` | Request immediate queue eligibility |
 | POST | `/api/posts/:id/schedule` | Set `{ "scheduledAt": "ISO-8601" }` |
 | GET | `/api/posts/:id/results` | Per-platform status, remote IDs/URLs, and errors |
-| GET | `/api/posts/:id/analytics` | Latest server-collected metrics by platform |
+| GET | `/api/posts/:id/analytics` | Latest normalized server-collected metrics by platform; never includes raw metrics |
 
 Individual adapter outcomes live on their corresponding job fields: `publishedAt`, `remotePostId`, `remotePostUrl`, `errorCode`, `errorMessage`, `retryCount`, and `nextRetryAt`. `publish` and `schedule` only request backend queue work; they never expose or call an SNS API from the browser.
 
-Provider-adapter operations use only a persisted `remotePostId` together with its `socialAccountId`; the local post ID is never a provider API identifier. Direct analytics lookup, when enabled, therefore uses `GET /api/analytics/:platform/:socialAccountId/:remotePostId`.
+Provider-adapter operations use only a persisted `remotePostId` together with its `socialAccountId`; the local post ID is never a provider API identifier. Provider analytics collection is scheduler-only; no browser API directly invokes a provider analytics lookup.
+
+## Analytics
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/api/analytics/campaigns/:campaignId/dashboard` | Owned campaign's normalized aggregate metrics only |
+| GET | `/api/analytics/campaigns/:campaignId/raw?platform=x&limit=50&cursor=<opaque>` | Owned campaign's paginated persisted raw metric snapshots |
+
+The dashboard response never contains `rawMetrics`. The raw endpoint is authenticated, verifies campaign ownership, returns up to 100 records per page in capture-time descending order, and exposes no provider access token or provider request capability.
 
 ## Integrations
 

@@ -1,7 +1,6 @@
-import { Controller, Get, Param, Req } from '@nestjs/common';
+import { Controller, Get, Param, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
 import { AnalyticsService } from './analytics.service';
-import { type SocialPlatform } from '../posts/post.entity';
 
 @Controller('analytics')
 export class AnalyticsController {
@@ -12,12 +11,14 @@ export class AnalyticsController {
     return this.analytics.campaignDashboard(request.user!.id, campaignId);
   }
 
-  @Get(':platform/:socialAccountId/:remotePostId')
-  get(
-    @Param('platform') platform: SocialPlatform,
-    @Param('socialAccountId') socialAccountId: string,
-    @Param('remotePostId') remotePostId: string,
+  @Get('campaigns/:campaignId/raw')
+  rawMetrics(
+    @Req() request: AuthenticatedRequest,
+    @Param('campaignId') campaignId: string,
+    @Query('platform') platform?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
   ) {
-    return this.analytics.getPostAnalytics(platform, remotePostId, socialAccountId);
+    return this.analytics.campaignRawMetrics(request.user!.id, campaignId, { platform, limit, cursor });
   }
 }

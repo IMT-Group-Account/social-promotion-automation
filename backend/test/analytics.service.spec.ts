@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AnalyticsService } from '../src/analytics/analytics.service';
-import type { AnalyticsCollectionTarget, AnalyticsRepository, CampaignPlatformAnalytics } from '../src/analytics/analytics.repository';
+import type {
+  AnalyticsCollectionTarget,
+  AnalyticsRepository,
+  CampaignRawMetricsPage,
+  CampaignRawMetricsQuery,
+  CampaignPlatformAnalytics,
+} from '../src/analytics/analytics.repository';
 import type { PostAnalytics, PublishResult, SocialAdapter, SocialPost, SocialPostResult } from '../src/publishing/adapters/social-adapter.interface';
 import type { SocialPlatform } from '../src/posts/post.entity';
 
@@ -11,12 +17,21 @@ const xTarget: AnalyticsCollectionTarget = { jobId: 'job-x', postId: 'post-001',
 class MemoryAnalyticsRepository implements AnalyticsRepository {
   readonly saved: { target: AnalyticsCollectionTarget; metrics: PostAnalytics }[] = [];
   readonly released: string[] = [];
-  constructor(private readonly targets: readonly AnalyticsCollectionTarget[], private readonly dashboard: readonly CampaignPlatformAnalytics[] | null) {}
+  readonly rawQueries: { ownerId: string; campaignId: string; query: CampaignRawMetricsQuery }[] = [];
+  constructor(
+    private readonly targets: readonly AnalyticsCollectionTarget[],
+    private readonly dashboard: readonly CampaignPlatformAnalytics[] | null,
+    private readonly rawPage: CampaignRawMetricsPage | null = { items: [], hasMore: false },
+  ) {}
   async claimCollectionTargets(): Promise<readonly AnalyticsCollectionTarget[]> { return this.targets; }
   async saveSnapshot(target: AnalyticsCollectionTarget, metrics: PostAnalytics): Promise<void> { this.saved.push({ target, metrics }); }
   async releaseCollectionClaim(jobId: string): Promise<void> { this.released.push(jobId); }
   async campaignDashboard(): Promise<readonly CampaignPlatformAnalytics[] | null> { return this.dashboard; }
   async postDashboard(): Promise<readonly CampaignPlatformAnalytics[] | null> { return this.dashboard; }
+  async campaignRawMetrics(ownerId: string, campaignId: string, query: CampaignRawMetricsQuery): Promise<CampaignRawMetricsPage | null> {
+    this.rawQueries.push({ ownerId, campaignId, query });
+    return this.rawPage;
+  }
 }
 
 class TestAdapter implements SocialAdapter {
@@ -46,15 +61,43 @@ test('collects one successful platform snapshot without losing a sibling platfor
 });
 
 test('returns platform-native metrics and leaves unavailable dashboard metrics absent', async () => {
-  const repository = new MemoryAnalyticsRepository([], [{ platform: 'linkedin', ...metrics }]);
+  const repository = new MemoryAnalyticsRepository([], [{
+    platform: 'linkedin', impressions: metrics.impressions, likes: metrics.likes, comments: metrics.comments, reposts: metrics.reposts, capturedAt: metrics.capturedAt,
+  }]);
   const service = new AnalyticsService([], repository);
   const dashboard = await service.campaignDashboard('owner-001', 'campaign-001');
 
   assert.equal(dashboard.campaignId, 'campaign-001');
   assert.deepEqual(dashboard.platforms.find((item) => item.platform === 'linkedin'), {
-    platform: 'linkedin', ...metrics,
+    platform: 'linkedin', impressions: metrics.impressions, likes: metrics.likes, comments: metrics.comments, reposts: metrics.reposts, capturedAt: metrics.capturedAt,
   });
   assert.deepEqual(dashboard.platforms.find((item) => item.platform === 'instagram'), {
     platform: 'instagram', capturedAt: null,
   });
+});
+
+test('returns stored raw metrics only through the paginated campaign raw endpoint contract', async () => {
+  const capturedAt = new Date('2026-08-24T00:00:00Z');
+  const repository = new MemoryAnalyticsRepository([], [], {
+    hasMore: true,
+    items: [{
+      metricId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      platform: 'x',
+      remotePostId: 'post-x-1',
+      capturedAt,
+      rawMetrics: { impression_count: 12_200, reply_count: 31 },
+    }],
+  });
+  const service = new AnalyticsService([], repository);
+
+  const response = await service.campaignRawMetrics('owner-001', 'campaign-001', { platform: 'x', limit: '25' });
+
+  assert.deepEqual(response.rawMetrics, [{
+    platform: 'x', remotePostId: 'post-x-1', capturedAt,
+    rawMetrics: { impression_count: 12_200, reply_count: 31 },
+  }]);
+  assert.equal(typeof response.nextCursor, 'string');
+  assert.deepEqual(repository.rawQueries, [{
+    ownerId: 'owner-001', campaignId: 'campaign-001', query: { platform: 'x', limit: 25, cursor: undefined },
+  }]);
 });

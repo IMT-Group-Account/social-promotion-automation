@@ -1,7 +1,13 @@
-import { Inject, Injectable, Logger, NotFoundException, NotImplementedException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, NotImplementedException } from '@nestjs/common';
 import { SOCIAL_PLATFORMS, type SocialPlatform } from '../posts/post.entity';
 import { SOCIAL_ADAPTERS, type SocialAdapter } from '../publishing/adapters/social-adapter.interface';
-import { ANALYTICS_REPOSITORY, type AnalyticsRepository, type CampaignPlatformAnalytics } from './analytics.repository';
+import {
+  ANALYTICS_REPOSITORY,
+  type AnalyticsRepository,
+  type CampaignPlatformAnalytics,
+  type CampaignRawMetricsQuery,
+  type RawMetricsCursor,
+} from './analytics.repository';
 
 export interface AnalyticsCollectionResult {
   collectedJobIds: readonly string[];
@@ -11,6 +17,17 @@ export interface AnalyticsCollectionResult {
 export interface CampaignAnalyticsDashboard {
   campaignId: string;
   platforms: readonly CampaignPlatformAnalytics[];
+}
+
+export interface CampaignRawMetricsResponse {
+  campaignId: string;
+  rawMetrics: readonly {
+    platform: SocialPlatform;
+    remotePostId: string;
+    capturedAt: Date;
+    rawMetrics: Readonly<Record<string, number>>;
+  }[];
+  nextCursor: string | null;
 }
 
 @Injectable()
@@ -71,6 +88,57 @@ export class AnalyticsService {
       platform, capturedAt: null,
     });
     return { postId, platforms };
+  }
+
+  async campaignRawMetrics(
+    ownerId: string,
+    campaignId: string,
+    input: { platform?: string; limit?: string; cursor?: string },
+  ): Promise<CampaignRawMetricsResponse> {
+    const query = this.parseRawMetricsQuery(input);
+    const page = await this.repository.campaignRawMetrics(ownerId, campaignId, query);
+    if (!page) throw new NotFoundException('Campaign not found.');
+    const last = page.items.at(-1);
+    return {
+      campaignId,
+      rawMetrics: page.items.map(({ metricId: _metricId, ...snapshot }) => snapshot),
+      nextCursor: page.hasMore && last ? this.encodeCursor({ capturedAt: last.capturedAt, metricId: last.metricId }) : null,
+    };
+  }
+
+  private parseRawMetricsQuery(input: { platform?: string; limit?: string; cursor?: string }): CampaignRawMetricsQuery {
+    const platform = input.platform === undefined || input.platform.length === 0 ? undefined : input.platform;
+    if (platform !== undefined && !SOCIAL_PLATFORMS.includes(platform as SocialPlatform)) {
+      throw new BadRequestException('platform must be a supported social platform.');
+    }
+    const limit = input.limit === undefined || input.limit.length === 0 ? 50 : Number(input.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException('limit must be an integer between 1 and 100.');
+    }
+    return {
+      platform: platform as SocialPlatform | undefined,
+      limit,
+      cursor: input.cursor === undefined || input.cursor.length === 0 ? undefined : this.decodeCursor(input.cursor),
+    };
+  }
+
+  private encodeCursor(cursor: RawMetricsCursor): string {
+    return Buffer.from(JSON.stringify({ capturedAt: cursor.capturedAt.toISOString(), metricId: cursor.metricId })).toString('base64url');
+  }
+
+  private decodeCursor(value: string): RawMetricsCursor {
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+      const { capturedAt, metricId } = parsed as { capturedAt?: unknown; metricId?: unknown };
+      const parsedDate = typeof capturedAt === 'string' ? new Date(capturedAt) : undefined;
+      if (!parsedDate || Number.isNaN(parsedDate.valueOf()) || typeof metricId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(metricId)) {
+        throw new Error();
+      }
+      return { capturedAt: parsedDate, metricId };
+    } catch {
+      throw new BadRequestException('cursor is invalid.');
+    }
   }
 
   private positiveIntegerEnv(name: string, fallback: number, maximum: number): number {

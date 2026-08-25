@@ -1,86 +1,185 @@
-# Vercel + Oracle Cloud 배포
+# Production deployment and migration runbook
 
-## 목표 구조
+This document is the required production release order for the API, publish
+worker, analytics scheduler, PostgreSQL, and Redis/BullMQ. The API, worker,
+and scheduler use the same image but are independent processes. Do not treat a
+successful API container restart as proof that the worker or scheduler is safe.
+
+GitHub Actions runs `npm ci`, lint, typecheck, test, and build on each push and
+pull request. It validates migration file structure only. It never backs up,
+migrates, or changes a production database.
+
+## Non-negotiable rules
+
+- Use one approved production migration runner and one release operator. It
+  must show the exact target database and pending migration list before apply,
+  record the applied versions afterwards, and run each migration only once.
+- Migration files already applied to any environment are immutable. Never use
+  `db reset`, schema recreation, or an ad-hoc manual SQL edit in production.
+- `docker compose up` must not be the mechanism that applies migrations. A
+  migration is a separately approved, single-run database operation.
+- Record the release commit/image digest, backup or snapshot ID, migration
+  versions, start/end times, and the final health evidence in the release log.
+- A failed database migration stops the release. Do not update API, worker, or
+  scheduler containers against an unknown schema state.
+
+## Migration compatibility classification
+
+Classify every migration before approval. The classification determines whether
+the old worker may remain alive while the schema changes.
+
+| Class | Examples | Compatibility rule |
+| --- | --- | --- |
+| Expand | New nullable column, new table, additive index | Old code must tolerate the added schema. New code must tolerate absent/backfilled values until deployment is complete. |
+| Contract or state-machine | Status constraint replacement, status remap, required column, renamed column, changed outbox semantics | Quiesce old worker and scheduler before migration. Do not run old worker against the new schema. |
+| Destructive | Drop column/table/constraint or make a formerly optional value required | Use an expand-migrate-contract release: deploy compatible readers/writers, backfill and verify, then remove the legacy shape in a later release after all old images are gone. |
+
+For any uncertainty, classify the migration as **Contract or state-machine**.
+
+## Required precondition for state-machine migrations
+
+This precondition occurs before the numbered deployment sequence below. It is
+mandatory for a migration such as `013_publish_remote_reconciliation.sql`.
+
+1. Pause the scheduler first so it cannot create new collection work:
+
+   ```bash
+   docker compose stop --timeout 120 scheduler
+   ```
+
+2. Drain the old publish worker. Allow its current provider calls to finish,
+   then stop it gracefully; never use a zero timeout or force-kill it.
+
+   ```bash
+   docker compose stop --timeout 120 worker
+   ```
+
+3. Confirm the old worker container is stopped and that no legacy
+   `processing` job remains. If a provider request was interrupted or its
+   outcome is unknown, investigate it before migration; do not convert it to a
+   retry candidate that could publish the same post again.
+
+   ```sql
+   SELECT status, count(*)
+   FROM social_publish_jobs
+   GROUP BY status
+   ORDER BY status;
+   ```
+
+The API may remain available while worker and scheduler are paused. New work
+can accumulate in the transactional outbox, but no old worker may claim or
+write it until the new worker image is running.
+
+## Mandatory production sequence
+
+After any required quiesce step, execute this exact order.
+
+1. **DB backup / snapshot**
+   - Create a provider backup or snapshot and record its immutable ID.
+   - Verify that the backup is restorable using the provider's documented
+     method; a snapshot-created message alone is not recovery evidence.
+   - Confirm the target database, release commit, and approved migration list.
+
+2. **Migration execution**
+   - Run the approved production migration runner once, in timestamp order.
+   - Capture its dry-run/plan, apply result, and post-apply migration history.
+   - For data migrations, verify the defined row counts and constraints before
+     continuing. Do not continue on a partial or unverified apply.
+
+3. **API container update**
+
+   ```bash
+   docker compose up -d --no-deps --build api
+   ```
+
+   Confirm the new image is running and its required configuration is present.
+   Do not yet resume any old worker or scheduler.
+
+4. **Worker update**
+
+   ```bash
+   docker compose up -d --no-deps --build worker
+   ```
+
+   Confirm the worker image matches the release image and that it can connect
+   to PostgreSQL and Redis. For a state-machine migration, this must be the
+   first worker process started after the migration.
+
+5. **Scheduler update**
+
+   ```bash
+   docker compose up -d --no-deps --build scheduler
+   ```
+
+   Confirm the scheduler image matches the release image. It must not start
+   before the new API and worker are available.
+
+6. **Health check**
+
+   ```bash
+   docker compose ps
+   curl --fail --silent --show-error https://<api-origin>/api/health
+   docker compose logs --tail=100 api worker scheduler
+   ```
+
+   Verify the API health response, container health, no repeated worker/scheduler
+   startup errors, the expected BullMQ queue depth, and normal outbox dispatch.
+   When a release changes publication state semantics, also verify one
+   non-mutating status read before allowing new operational publishing.
+
+## State-machine compatibility: processing to claimed
+
+Migration `013_publish_remote_reconciliation.sql` is a Contract or
+state-machine migration because it:
+
+- replaces the status constraint and maps legacy `processing` rows to
+  `claimed`;
+- adds `remote_request_key` and `remote_request_started_at`;
+- requires `remote_request_key` for `remote_requesting`, `remote_confirmed`,
+  and `published` states; and
+- makes `remote_requesting` a durable reconciliation boundary before an
+  irreversible provider write.
+
+An old worker can still try to write `processing`, cannot populate the new
+request key, and does not follow the new reconciliation contract. Therefore it
+must never coexist with the migrated database. The required sequence is:
 
 ```text
-                [ 관리자 ]
-                    │
-                    ▼
-            ┌───────────────┐
-            │    Next.js    │
-            │    Vercel     │
-            └───────┬───────┘
-                    │ REST API
-                    ▼
-          ┌───────────────────┐
-          │      NestJS       │
-          │   Oracle Cloud    │
-          └─────────┬─────────┘
-                    │
-         ┌──────────┴───────────┐
-         │                      │
-         ▼                      ▼
-    PostgreSQL                Redis
-                               │
-                               ▼
-                             BullMQ
-                               │
-                       ┌───────┴───────┐
-                       │ Publish Worker│
-                       └───────┬───────┘
-                               │
-          ┌────────┬───────────┼──────────┬─────────┐
-          ▼        ▼           ▼          ▼         ▼
-      LinkedIn  Facebook   Instagram   Threads      X
-         API       API        API        API       API
+old scheduler stopped
+  -> old worker drained and stopped
+  -> no unresolved legacy processing work
+  -> backup / snapshot
+  -> migration 013
+  -> new API
+  -> new worker
+  -> new scheduler
+  -> health and queue verification
 ```
 
-GitHub는 `frontend/` 변경을 Vercel 프로젝트로, `backend/` 변경을 Oracle Cloud VM의 Compose 이미지 빌드로 전달한다. Analytics Scheduler는 같은 Oracle VM에서 별도 프로세스로 실행되며 PostgreSQL에 저장된 성공 발행 건을 조회해 각 Adapter의 조회 API를 호출한다.
+For future state changes, prefer a two-release expand-migrate-contract plan
+when it is possible to make new workers accept both states. If it is not
+possible, use the same quiesced cutover procedure; never rely on a status
+constraint error as a safe handoff mechanism.
 
-Vercel 브라우저 앱은 자체 API만 호출한다. OAuth 토큰과 SNS API 비밀값은 Oracle VM의 `backend.env`에만 두며, `NEXT_PUBLIC_*` 변수와 브라우저 저장소에는 넣지 않는다.
+## Rollback and recovery
 
-## Vercel: frontend만 배포
+- Before migration apply, stop the release and keep the known-good containers
+  running only if they remain compatible with the current database.
+- After an additive migration, code rollback is allowed only after verifying
+  the prior image ignores the new schema safely.
+- After a state-machine or destructive migration, do not restart an old worker
+  against the new database. Prefer a forward recovery migration and a fixed
+  new image.
+- Restoring a production backup/snapshot is a destructive incident action. It
+  requires explicit incident authorization, a confirmed restore target, and
+  reconciliation of any provider writes that occurred after the snapshot.
 
-1. GitHub 저장소를 Vercel 프로젝트에 연결하고 **Root Directory**를 `frontend`로 지정한다.
-2. Production 환경 변수 `NEXT_PUBLIC_API_BASE_URL`을 Oracle API의 HTTPS origin(예: `https://api.example.com`)으로 설정한다.
-3. Vercel 배포 URL과 커스텀 도메인을 Oracle의 `CORS_ORIGINS`에 정확히 쉼표로 구분해 넣는다.
-4. `frontend/vercel.json`은 Next.js framework 및 기본 응답 헤더만 설정한다. OAuth provider callback은 Vercel이 아니라 Oracle API URL을 등록한다.
+## Deployment environment
 
-## Oracle Cloud VM: backend 실행
-
-VM에는 Docker Engine 및 Docker Compose plugin이 설치되어 있어야 한다. PostgreSQL 및 Redis는 VM 내부 서비스 또는 private/TLS managed endpoint 모두 가능하지만, Oracle VM과 네트워크를 분리하고 공인 인터넷에 인증 없이 노출하지 않는다.
-
-```bash
-git clone <repository-url>
-cd <repository>/infrastructure/oracle
-cp backend.env.example backend.env
-# backend.env에 DATABASE_URL, REDIS_URL, OAuth provider secrets, CORS_ORIGINS를 채운다.
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=100 api worker scheduler
-```
-
-`api`, `worker`, `scheduler`는 동일한 빌드 이미지를 사용하지만 서로 다른 실행 프로세스다. 따라서 X 작업이 실패해도 다른 플랫폼의 BullMQ job 상태나 analytics 작업을 실패로 전파하지 않는다. API는 `GET /api/health`로 liveness를 제공한다.
-
-Oracle 앞단에는 HTTPS reverse proxy 또는 load balancer를 두고 443만 외부에 노출한다. Compose의 기본 API 포트(3000)는 방화벽 또는 보안 목록에서 reverse proxy만 접근할 수 있게 제한한다.
-
-## 배포 순서와 롤백
-
-1. 먼저 새 이미지가 마이그레이션과 호환되는지 staging에서 확인한다.
-2. 데이터베이스 마이그레이션을 별도, 단일 실행 작업으로 적용한다. `docker compose up`가 자동으로 스키마를 변경하지는 않는다.
-3. `docker compose up -d --build`로 API, Worker, Scheduler를 함께 교체한다.
-4. `/api/health`, worker 로그, BullMQ 대기열 및 CORS preflight를 확인한다.
-5. 장애 시 마지막 정상 Git revision으로 checkout한 뒤 같은 Compose 명령으로 이미지를 재생성한다. 이미 적용한 DB migration은 되돌리기보다 호환되는 복구 migration을 추가한다.
-
-## 필수 환경 변수
-
-- `DATABASE_URL`, `REDIS_URL`: backend 전용 연결 정보
-- `OAUTH_TOKEN_ENCRYPTION_KEYS`: 버전별 base64 인코딩 32-byte AES-256 키 JSON map. 예: `{"v1":"old-key","v2":"current-key"}`
-- `OAUTH_TOKEN_ENCRYPTION_KEY_VERSION`: 새 암호문을 쓸 현재 키 버전. 기존 `v1.<iv>.<tag>.<ciphertext>`는 `v1` 키로 계속 복호화한다.
-- `OAUTH_TOKEN_ENCRYPTION_KEY`: 구 단일 키 배포에서만 사용하는 deprecated 호환 변수. 키 링 구성 시 사용하지 않는다.
-- `PUBLIC_API_ORIGIN`: Oracle API의 HTTPS origin; 각 SNS OAuth callback 등록값의 기준
-- `CORS_ORIGINS`: Vercel frontend의 정확한 origin 목록
-- OAuth, LinkedIn/Meta/Threads/X/Kakao provider 변수: root `.env.example`의 해당 키 전부
-- `ANALYTICS_COLLECTION_INTERVAL_MS`: 1분~24시간. 비우면 Scheduler는 시작하지만 수집하지 않는다.
-
-`PUBLISH_WORKER_ENABLED`와 `SCHEDULER_ENABLED`는 Compose가 worker/scheduler 컨테이너에만 강제로 설정한다. API 컨테이너에는 설정하지 않는다.
+- `DATABASE_URL` and `REDIS_URL` are server-only connection values.
+- OAuth provider secrets, token-encryption keys, and service JWT settings stay
+  in `infrastructure/oracle/backend.env`, never in Vercel or browser variables.
+- `PUBLISH_WORKER_ENABLED=true` belongs only to the worker container and
+  `SCHEDULER_ENABLED=true` only to the scheduler container.
+- Expose only the HTTPS reverse proxy or load balancer publicly. Keep the
+  Compose API port restricted to that proxy/load balancer.

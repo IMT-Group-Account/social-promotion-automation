@@ -11,7 +11,7 @@ export class ServiceJwtAuthGuard implements CanActivate {
     private readonly verifier: ServiceJwtVerifier,
   ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_ROUTE, [context.getHandler(), context.getClass()]);
     if (isPublic) return true;
 
@@ -21,7 +21,7 @@ export class ServiceJwtAuthGuard implements CanActivate {
     const match = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(authorization);
     if (!match) throw new UnauthorizedException('Authorization: Bearer <token> is required.');
 
-    request.user = this.verifier.verify(match[1]);
+    request.user = await this.verifier.verify(match[1]);
     return true;
   }
 }

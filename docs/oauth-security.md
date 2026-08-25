@@ -20,9 +20,18 @@ Frontend
 - The PKCE verifier, access token, and optional refresh token are AES-256-GCM encrypted using the server-only versioned key ring before persistence. `OAUTH_TOKEN_ENCRYPTION_KEYS` is a JSON map of version to base64 32-byte AES key, and `OAUTH_TOKEN_ENCRYPTION_KEY_VERSION` chooses the one current write key. A ciphertext such as `v1.<iv>.<tag>.<ciphertext>` is always decrypted with the retained `v1` key; new ciphertexts are written with the current version only.
 - Rotation is deploy-first: add the new key alongside the old key, change `OAUTH_TOKEN_ENCRYPTION_KEY_VERSION` to the new version, then retain the old key until all corresponding OAuth states and credentials are expired, revoked, or re-encrypted. Removing a referenced key makes that ciphertext fail closed. `OAUTH_TOKEN_ENCRYPTION_KEY` remains a deprecated single-key compatibility fallback and is ignored when the key ring is configured.
 - Callback responses expose account metadata only. They never contain a provider access token, refresh token, encryption key, or credential reference.
-- `ServiceJwtAuthGuard` verifies only our service's HS256 JWT: signature, `iss`, `aud`, mandatory unexpired `exp`, optional `nbf`, and nonempty `sub`. It maps `sub` to `request.user.id`. Query parameters, request bodies, browser storage, and OAuth-provider tokens are never accepted as the user identity.
-- `SERVICE_JWT_SECRET`, `SERVICE_JWT_ISSUER`, and `SERVICE_JWT_AUDIENCE` are required at API startup. The secret must be at least 32 bytes and stays server-side; the upstream authentication service and this API must use the same issuer/audience contract.
+- `ServiceJwtAuthGuard` verifies only our service's asymmetric JWT: the configured `RS256` or `ES256` header algorithm, a required `kid`, the matching public key from the authentication server's HTTPS JWKS, `iss`, `aud`, mandatory unexpired `exp`, optional `nbf`, and nonempty `sub`. It maps `sub` to `request.user.id`. `HS256` and tokens without a JWKS `kid` are rejected. Query parameters, request bodies, browser storage, and OAuth-provider tokens are never accepted as the user identity.
+- `SERVICE_JWT_ISSUER`, `SERVICE_JWT_AUDIENCE`, `SERVICE_JWT_SIGNING_ALGORITHM`, and `SERVICE_JWT_JWKS_URL` are required at API startup. The API accepts only HTTPS JWKS URLs, caches valid signing keys for the bounded configured TTL, and rate-limits unknown-`kid` refreshes. The authentication server retains the private key; this API stores no JWT signing secret or private key.
 - The global guard protects all NestJS routes unless `@PublicRoute()` is explicitly applied. OAuth callbacks, the health check, and Kakao's inbound public-link/webhook routes are public because they are not browser user API calls; the Kakao event route retains its separate integration-key check.
+
+## Service JWT cutover and key rotation
+
+1. Create an `RS256` or `ES256` signing key only in the authentication server, publish its public JWK with a stable `kid` at the configured HTTPS JWKS URL, and ensure issued access tokens contain that `kid`, `iss`, and the Social Promotion API `aud`.
+2. Set `SERVICE_JWT_ISSUER`, `SERVICE_JWT_AUDIENCE`, `SERVICE_JWT_SIGNING_ALGORITHM`, and `SERVICE_JWT_JWKS_URL` on the API, then deploy this API revision. Do not supply `SERVICE_JWT_SECRET` to the API.
+3. Switch the authentication server to issue the matching asymmetric algorithm. This API intentionally has no HS256 compatibility mode, so coordinate the issuer switch with the API deployment; otherwise requests fail closed with `401`.
+4. For ordinary signing-key rotation, publish old and new public JWKs together, start issuing tokens with the new `kid`, retain the old JWK until every old token can no longer be accepted, then remove the old JWK. An unknown `kid` causes one rate-limited refresh, so a newly published key does not require an API restart.
+
+An emergency rollback requires restoring the prior API revision and its old authentication contract. It reintroduces the shared-secret trust boundary and should be limited to incident recovery; the normal recovery path is to restore the issuer's previous public signing key in JWKS.
 
 ## Callback registration
 

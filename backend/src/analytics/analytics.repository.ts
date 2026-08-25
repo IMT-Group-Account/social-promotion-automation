@@ -9,9 +9,33 @@ export interface AnalyticsCollectionTarget {
   remotePostId: string;
 }
 
-export interface CampaignPlatformAnalytics extends Omit<PostAnalytics, 'capturedAt'> {
+export interface CampaignPlatformAnalytics extends Omit<PostAnalytics, 'capturedAt' | 'rawMetrics'> {
   platform: SocialPlatform;
   capturedAt: Date | null;
+}
+
+export interface RawMetricsCursor {
+  capturedAt: Date;
+  metricId: string;
+}
+
+export interface RawMetricSnapshot {
+  metricId: string;
+  platform: SocialPlatform;
+  remotePostId: string;
+  capturedAt: Date;
+  rawMetrics: Readonly<Record<string, number>>;
+}
+
+export interface CampaignRawMetricsPage {
+  items: readonly RawMetricSnapshot[];
+  hasMore: boolean;
+}
+
+export interface CampaignRawMetricsQuery {
+  cursor: RawMetricsCursor | undefined;
+  limit: number;
+  platform: SocialPlatform | undefined;
 }
 
 export const ANALYTICS_REPOSITORY = Symbol('ANALYTICS_REPOSITORY');
@@ -22,4 +46,5 @@ export interface AnalyticsRepository {
   releaseCollectionClaim(jobId: string): Promise<void>;
   campaignDashboard(ownerId: string, campaignId: string): Promise<readonly CampaignPlatformAnalytics[] | null>;
   postDashboard(ownerId: string, postId: string): Promise<readonly CampaignPlatformAnalytics[] | null>;
+  campaignRawMetrics(ownerId: string, campaignId: string, query: CampaignRawMetricsQuery): Promise<CampaignRawMetricsPage | null>;
 }

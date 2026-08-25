@@ -1,6 +1,12 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { Pool } from 'pg';
-import type { AnalyticsCollectionTarget, AnalyticsRepository, CampaignPlatformAnalytics } from './analytics.repository';
+import type {
+  AnalyticsCollectionTarget,
+  AnalyticsRepository,
+  CampaignRawMetricsPage,
+  CampaignRawMetricsQuery,
+  CampaignPlatformAnalytics,
+} from './analytics.repository';
 import type { PostAnalytics } from '../publishing/adapters/social-adapter.interface';
 
 @Injectable()
@@ -77,7 +83,7 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
     if (!exists.rows[0]) return null;
     const result = await this.db().query<{
       platform: CampaignPlatformAnalytics['platform']; impressions: string | null; reach: string | null; views: string | null; likes: string | null;
-      comments: string | null; shares: string | null; reposts: string | null; clicks: string | null; raw_metrics: unknown; captured_at: Date | null;
+      comments: string | null; shares: string | null; reposts: string | null; clicks: string | null; captured_at: Date | null;
     }>(
        `WITH latest_metric AS (
          SELECT DISTINCT ON (social_post.social_publish_job_id)
@@ -96,7 +102,6 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
               sum(latest_metric.shares)::text AS shares,
               sum(latest_metric.reposts)::text AS reposts,
               sum(latest_metric.clicks)::text AS clicks,
-              COALESCE(jsonb_agg(latest_metric.raw_metrics) FILTER (WHERE latest_metric.raw_metrics IS NOT NULL), '[]'::jsonb) AS raw_metrics,
               max(latest_metric.captured_at) AS captured_at
        FROM posts
        JOIN social_publish_jobs AS job ON job.post_id = posts.id AND job.status = 'published'
@@ -115,7 +120,7 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
     if (!exists.rows[0]) return null;
     const result = await this.db().query<{
       platform: CampaignPlatformAnalytics['platform']; impressions: string | null; reach: string | null; views: string | null; likes: string | null;
-      comments: string | null; shares: string | null; reposts: string | null; clicks: string | null; raw_metrics: unknown; captured_at: Date | null;
+      comments: string | null; shares: string | null; reposts: string | null; clicks: string | null; captured_at: Date | null;
     }>(
        `WITH latest_metric AS (
          SELECT DISTINCT ON (social_post.social_publish_job_id)
@@ -135,7 +140,6 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
               sum(latest_metric.shares)::text AS shares,
               sum(latest_metric.reposts)::text AS reposts,
               sum(latest_metric.clicks)::text AS clicks,
-              COALESCE(jsonb_agg(latest_metric.raw_metrics) FILTER (WHERE latest_metric.raw_metrics IS NOT NULL), '[]'::jsonb) AS raw_metrics,
               max(latest_metric.captured_at) AS captured_at
        FROM social_publish_jobs AS job
        LEFT JOIN latest_metric ON latest_metric.social_publish_job_id = job.id
@@ -147,11 +151,45 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
     return result.rows.map((row) => ({ platform: row.platform, ...this.dashboardMetrics(row), capturedAt: row.captured_at }));
   }
 
+  async campaignRawMetrics(ownerId: string, campaignId: string, query: CampaignRawMetricsQuery): Promise<CampaignRawMetricsPage | null> {
+    const exists = await this.db().query<{ id: string }>(`SELECT id FROM campaigns WHERE id = $1 AND owner_id = $2`, [campaignId, ownerId]);
+    if (!exists.rows[0]) return null;
+    const result = await this.db().query<{
+      id: string;
+      platform: CampaignPlatformAnalytics['platform'];
+      remote_post_id: string;
+      captured_at: Date;
+      raw_metrics: unknown;
+    }>(
+      `SELECT metric.id, social_post.platform, social_post.remote_post_id, metric.captured_at, metric.raw_metrics
+       FROM posts
+       JOIN social_posts AS social_post ON social_post.post_id = posts.id
+       JOIN social_metrics AS metric ON metric.social_post_id = social_post.id
+       WHERE posts.campaign_id = $1
+         AND ($2::text IS NULL OR social_post.platform = $2)
+         AND ($3::timestamptz IS NULL OR (metric.captured_at, metric.id) < ($3::timestamptz, $4::uuid))
+       ORDER BY metric.captured_at DESC, metric.id DESC
+       LIMIT $5`,
+      [campaignId, query.platform ?? null, query.cursor?.capturedAt ?? null, query.cursor?.metricId ?? null, query.limit + 1],
+    );
+    const hasMore = result.rows.length > query.limit;
+    return {
+      hasMore,
+      items: result.rows.slice(0, query.limit).map((row) => ({
+        metricId: row.id,
+        platform: row.platform,
+        remotePostId: row.remote_post_id,
+        capturedAt: row.captured_at,
+        rawMetrics: this.numericRawMetrics(row.raw_metrics),
+      })),
+    };
+  }
+
   private dashboardMetrics(row: {
     impressions: string | null; reach: string | null; views: string | null; likes: string | null;
-    comments: string | null; shares: string | null; reposts: string | null; clicks: string | null; raw_metrics: unknown;
+    comments: string | null; shares: string | null; reposts: string | null; clicks: string | null;
   }): Omit<CampaignPlatformAnalytics, 'platform' | 'capturedAt'> {
-    return { ...this.standardMetrics(row), ...this.rawMetrics(row.raw_metrics) };
+    return this.standardMetrics(row);
   }
 
   private standardMetrics(row: {
@@ -170,16 +208,11 @@ export class PgAnalyticsRepository implements AnalyticsRepository {
     };
   }
 
-  private rawMetrics(value: unknown): Pick<CampaignPlatformAnalytics, 'rawMetrics'> | Record<string, never> {
-    const values = Array.isArray(value) ? value : [value];
-    const totals: Record<string, number> = {};
-    for (const candidate of values) {
-      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
-      for (const [name, metric] of Object.entries(candidate)) {
-        if (typeof metric === 'number' && Number.isFinite(metric) && metric >= 0) totals[name] = (totals[name] ?? 0) + metric;
-      }
-    }
-    return Object.keys(totals).length > 0 ? { rawMetrics: totals } : {};
+  private numericRawMetrics(value: unknown): Readonly<Record<string, number>> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0),
+    );
   }
 
   private db(): Pool {
