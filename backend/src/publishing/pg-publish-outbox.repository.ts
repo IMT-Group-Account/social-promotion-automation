@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common';
 import { Pool, type PoolClient } from 'pg';
 import { type Post, type SocialPlatform, type SocialPublishJob } from '../posts/post.entity';
 import type { PublishExecution } from './publishing.service';
@@ -6,8 +6,9 @@ import type { PublishOutboxRepository, ClaimedPublishJob } from './publish-outbo
 import type { PublishQueueRecord } from './publish-queue.port';
 
 @Injectable()
-export class PgPublishOutboxRepository implements PublishOutboxRepository {
+export class PgPublishOutboxRepository implements PublishOutboxRepository, OnModuleDestroy {
   private pool: Pool | undefined;
+  async onModuleDestroy(): Promise<void> { await this.pool?.end(); }
 
   async claimOutbox(limit: number, leaseMs: number): Promise<readonly PublishQueueRecord[]> {
     const result = await this.db().query<{
@@ -60,24 +61,29 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
     );
   }
 
-  async claimPublishJob(jobId: string, leaseMs: number): Promise<ClaimedPublishJob | null> {
+  async claimPublishJob(jobId: string, leaseMs: number, queueJobId?: string): Promise<ClaimedPublishJob | null> {
     const client = await this.db().connect();
     try {
       await client.query('BEGIN');
       const claimed = await client.query<JobRow>(
         `UPDATE social_publish_jobs
-         SET status = 'claimed', lease_expires_at = now() + ($2::bigint * interval '1 millisecond'), next_retry_at = NULL, updated_at = now()
+         SET status = CASE WHEN status='remote_confirmed' THEN 'remote_confirmed' ELSE 'claimed' END,
+             lease_expires_at = now() + ($2::bigint * interval '1 millisecond'), next_retry_at = NULL, updated_at = now()
          WHERE id = $1
            AND scheduled_at <= now()
-           AND (status = 'waiting' OR (status = 'retrying' AND next_retry_at <= now()) OR (status = 'claimed' AND lease_expires_at <= now()) OR (status = 'remote_requesting' AND next_retry_at <= now()))
+           AND EXISTS (SELECT 1 FROM posts p WHERE p.id=post_id AND p.status <> 'draft')
+           AND ($3::text IS NULL OR EXISTS (SELECT 1 FROM social_publish_queue_outbox o WHERE o.publish_job_id=social_publish_jobs.id AND o.queue_job_id=$3))
+           AND (status = 'waiting' OR (status = 'retrying' AND next_retry_at <= now()) OR (status = 'claimed' AND lease_expires_at <= now())
+             OR (status = 'remote_requesting' AND (next_retry_at <= now() OR lease_expires_at <= now()))
+             OR (status = 'remote_confirmed' AND (lease_expires_at IS NULL OR lease_expires_at <= now())))
          RETURNING id, post_id, platform, account_id, status, scheduled_at, published_at, remote_post_id, remote_post_url,
                    error_code, error_message, retry_count, lease_expires_at, next_retry_at, remote_request_key, remote_request_started_at`,
-        [jobId, leaseMs],
+        [jobId, leaseMs, queueJobId ?? null],
       );
       const jobRow = claimed.rows[0];
       if (!jobRow) { await client.query('COMMIT'); return null; }
       const post = await client.query<PostRow>(
-        `SELECT id, campaign_id, owner_id, title, body, destination_url, scheduled_at, status
+        `SELECT id, campaign_id, owner_id, title, body, destination_url, scheduled_at, status, revision, platform_bodies
          FROM posts WHERE id = $1`, [jobRow.post_id],
       );
       const postRow = post.rows[0];
@@ -172,7 +178,7 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
           );
           await client.query(
             `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
-             SELECT owner_id, 'social_post.published', 'social_publish_job', $1, jsonb_build_object('platform', $2)
+             SELECT owner_id, 'social_post.published', 'social_publish_job', $1, jsonb_build_object('platform', $2::text)
              FROM posts WHERE id = $3`,
             [job.id, row.platform, row.post_id],
           );
@@ -226,29 +232,29 @@ export class PgPublishOutboxRepository implements PublishOutboxRepository {
     await client.query(
       `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
        SELECT owner_id, 'social_publish_job.failed', 'social_publish_job', $1,
-              jsonb_build_object('platform', $2, 'errorCode', $3, 'retryCount', $4)
+              jsonb_build_object('platform', $2::text, 'errorCode', $3::text, 'retryCount', $4::integer)
        FROM posts WHERE id = $5`,
       [jobId, row.platform, row.error_code, row.retry_count, row.post_id],
     );
   }
 }
 
-interface JobRow {
+export interface JobRow {
   id: string; post_id: string; platform: SocialPlatform; account_id: string; status: SocialPublishJob['status']; scheduled_at: Date;
   published_at: Date | null; remote_post_id: string | null; remote_post_url: string | null; error_code: string | null;
   error_message: string | null; retry_count: number; lease_expires_at: Date | null; next_retry_at: Date | null;
   remote_request_key: string | null; remote_request_started_at: Date | null;
 }
-interface PostRow { id: string; campaign_id: string; owner_id: string; title: string; body: string; destination_url: string | null; scheduled_at: Date; status: Post['status']; }
-interface MediaRow { media_type: 'image' | 'video'; storage_url: string; }
+export interface PostRow { revision?: number; platform_bodies?: Post['content']['platformBodies']; id: string; campaign_id: string; owner_id: string; title: string; body: string; destination_url: string | null; scheduled_at: Date; status: Post['status']; }
+export interface MediaRow { media_type: 'image' | 'video'; storage_url: string; }
 
-function toJob(row: JobRow): SocialPublishJob {
+export function toJob(row: JobRow): SocialPublishJob {
   return { id: row.id, postId: row.post_id, platform: row.platform, accountId: row.account_id, status: row.status, scheduledAt: row.scheduled_at,
     publishedAt: row.published_at, remotePostId: row.remote_post_id, remotePostUrl: row.remote_post_url, errorCode: row.error_code,
     errorMessage: row.error_message, retryCount: row.retry_count, leaseExpiresAt: row.lease_expires_at, nextRetryAt: row.next_retry_at,
     remoteRequestKey: row.remote_request_key, remoteRequestStartedAt: row.remote_request_started_at };
 }
-function toPost(row: PostRow, media: readonly MediaRow[]): Post {
-  return { id: row.id, campaignId: row.campaign_id, ownerId: row.owner_id, scheduledAt: row.scheduled_at, status: row.status,
-    content: { title: row.title, body: row.body, url: row.destination_url, media: media.map((item) => ({ type: item.media_type, url: item.storage_url })) } };
+export function toPost(row: PostRow, media: readonly MediaRow[]): Post {
+  return { id: row.id, campaignId: row.campaign_id, ownerId: row.owner_id, scheduledAt: row.scheduled_at, status: row.status, revision: row.revision,
+    content: { platformBodies: row.platform_bodies, title: row.title, body: row.body, url: row.destination_url, media: media.map((item) => ({ type: item.media_type, url: item.storage_url })) } };
 }

@@ -1,31 +1,28 @@
+import { NotFoundException } from '@nestjs/common';
 import { type Post, type SocialPublishJob } from './post.entity';
-
 export const POST_REPOSITORY = Symbol('POST_REPOSITORY');
-
+export interface PostRecord { post: Post; jobs: readonly SocialPublishJob[]; }
 export interface PostRepository {
-  save(post: Post, jobs: readonly SocialPublishJob[]): void;
-  findPostById(postId: string): Post | null;
-  findJobsByPostId(postId: string): readonly SocialPublishJob[];
-  replacePost(post: Post): void;
-  replaceJob(job: SocialPublishJob): void;
+  save(post: Post, jobs: readonly SocialPublishJob[]): Promise<void>;
+  findOwned(postId: string, ownerId: string): Promise<PostRecord>;
+  list(ownerId: string, offset: number): Promise<readonly PostRecord[]>;
+  mutate(postId: string, ownerId: string, work: (record: PostRecord) => PostRecord): Promise<PostRecord>;
 }
-
-/** Temporary process-local implementation. Replace this provider with a PostgreSQL repository before deployment. */
+/** Test fixture only; never registered in the application. */
 export class InMemoryPostRepository implements PostRepository {
-  private readonly posts = new Map<string, Post>();
-  private readonly jobs = new Map<string, SocialPublishJob>();
-
-  save(post: Post, jobs: readonly SocialPublishJob[]): void {
-    this.posts.set(post.id, post);
-    jobs.forEach((job) => this.jobs.set(job.id, job));
+  private records = new Map<string, PostRecord>();
+  async save(post: Post, jobs: readonly SocialPublishJob[]): Promise<void> { this.records.set(post.id, structuredClone({ post, jobs })); }
+  async findOwned(id: string, ownerId: string): Promise<PostRecord> {
+    const record = this.records.get(id);
+    if (!record || record.post.ownerId !== ownerId) throw new NotFoundException('Post not found.');
+    return structuredClone(record);
   }
-
-  findPostById(postId: string): Post | null { return this.posts.get(postId) ?? null; }
-
-  findJobsByPostId(postId: string): readonly SocialPublishJob[] {
-    return [...this.jobs.values()].filter((job) => job.postId === postId);
+  async list(ownerId: string, offset: number): Promise<readonly PostRecord[]> {
+    return structuredClone([...this.records.values()].filter(r => r.post.ownerId === ownerId).slice(offset, offset + 50));
   }
-
-  replacePost(post: Post): void { this.posts.set(post.id, post); }
-  replaceJob(job: SocialPublishJob): void { this.jobs.set(job.id, job); }
+  async mutate(id: string, ownerId: string, work: (record: PostRecord) => PostRecord): Promise<PostRecord> {
+    const current = await this.findOwned(id, ownerId);
+    const next = work(current); next.post = {...next.post, revision:(current.post.revision ?? 1)+1};
+    await this.save(next.post, next.jobs); return next;
+  }
 }

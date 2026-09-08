@@ -4,9 +4,9 @@ export type PublishJobStatus = 'waiting' | 'claimed' | 'remote_requesting' | 're
 export type PostStatus = 'draft' | 'scheduled' | 'publishing' | 'completed' | 'partially_failed' | 'failed' | 'cancelled';
 
 export interface PostMedia { type: 'image' | 'video'; url: string; }
-export interface PostContent { title: string; body: string; url: string | null; media: readonly PostMedia[]; }
+export interface PostContent { title: string; body: string; url: string | null; media: readonly PostMedia[]; platformBodies?: Partial<Record<SocialPlatform, string>>; }
 export interface SocialTarget { platform: SocialPlatform; accountId: string; }
-export interface Post { id: string; campaignId: string; ownerId: string; content: PostContent; scheduledAt: Date; status: PostStatus; }
+export interface Post { id: string; campaignId: string; ownerId: string; content: PostContent; scheduledAt: Date; status: PostStatus; revision?: number; }
 export interface SocialPublishJob {
   id: string; postId: string; platform: SocialPlatform; accountId: string; status: PublishJobStatus; scheduledAt: Date;
   publishedAt: Date | null; remotePostId: string | null; remotePostUrl: string | null;

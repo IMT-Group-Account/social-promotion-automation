@@ -4,9 +4,19 @@ import { ForbiddenException } from '@nestjs/common';
 import { LinkedInAdapter } from '../src/publishing/adapters/linkedin.adapter';
 import type { LinkedInCredentialResolver, LinkedInPublishingCredential } from '../src/publishing/adapters/linkedin-credential.service';
 import type { LinkedInHttpClient, LinkedInHttpRequest, LinkedInHttpResponse } from '../src/publishing/adapters/linkedin-http.client';
+import { LinkedInCredentialService } from '../src/publishing/adapters/linkedin-credential.service';
+import type { OAuthAccountRepository } from '../src/auth/oauth-account.repository';
+import type { TokenService } from '../src/auth/token.service';
 
 process.env.LINKEDIN_POSTS_URL = 'https://api.linkedin.com/rest/posts';
 process.env.LINKEDIN_API_VERSION = '202608';
+
+test('OIDC member subject resolves to the person author URN expected by the publishing adapter',async()=>{
+  const accounts={findActiveSocialAccount:async()=>({id:'account',platformAccountId:'member123',scope:['w_member_social'],expiresAt:null,accessTokenEncrypted:'fixture'})} as unknown as OAuthAccountRepository;
+  const tokens={decrypt:()=> 'test-only-token'} as unknown as TokenService;
+  const credential=await new LinkedInCredentialService(accounts,tokens).resolve('account');
+  assert.equal(credential.authorUrn,'urn:li:person:member123');
+});
 
 class TestCredentialResolver implements LinkedInCredentialResolver {
   constructor(private readonly credential: LinkedInPublishingCredential) {}

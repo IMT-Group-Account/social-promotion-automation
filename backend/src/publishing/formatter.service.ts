@@ -43,7 +43,8 @@ export class FormatterService {
     const formatter = <T extends keyof PlatformContents>(platform: T): PlatformContents[T] => {
       const candidate = this.formattersByPlatform.get(platform);
       if (!candidate) throw new Error(`No content formatter is registered for ${platform}.`);
-      return candidate.format(original) as PlatformContents[T];
+      const override = post.content.platformBodies?.[platform];
+      return candidate.format(override === undefined ? original : {...original,title:'',message:override}) as PlatformContents[T];
     };
     return {
       original,

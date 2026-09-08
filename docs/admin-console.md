@@ -1,12 +1,14 @@
 # 관리자 홍보 콘솔
 
-`frontend`는 Next.js App Router 기반 관리자 화면이다. 브라우저는 다음 Backend API만 호출한다.
+현재 동작·설정·지원 제한은 [1차 필수 운영 흐름](editorial-workflow.md)을 기준으로 한다.
 
-- `GET /api/integrations`으로 연결된 계정을 읽고 활성 계정만 선택 가능하게 표시한다.
-- `POST /api/campaigns`, `POST /api/posts`로 캠페인과 SNS별 publish job을 만든다.
-- `POST /api/posts/:id/publish` 또는 `POST /api/posts/:id/schedule`로 Worker 작업을 요청한다.
-- `GET /api/posts/:id/results`로 `waiting`, `processing`, `published`, `retrying`, `failed`, `cancelled`를 표시한다.
+`frontend`는 Next.js App Router 기반 관리자 화면이다. 브라우저는 같은 origin의 `/api/backend/*`에 요청하고 Next.js 서버가 HttpOnly 앱 세션 JWT를 Backend Bearer 헤더로 전달한다. SNS OAuth 토큰과 스토리지 내부 경로는 브라우저에 노출하지 않는다.
 
-결과 패널은 `published`를 성공으로, `retrying`을 재시도 중으로 보여주고 `nextRetryAt`이 있으면 다음 재시도 시각을 표시한다. 프론트엔드는 SNS API·OAuth token·Redis에 직접 접속하지 않는다.
+- 작성·검수: 캠페인 선택·생성 → 대상 계정 선택 → 파일 업로드 및 문구 작성 → 초안 저장 → SNS별 최종 미리보기 → 승인·예약.
+- 계정 관리: SNS별 연결·재연결·해제, 만료·게시 권한 부족 표시, Meta 페이지 선택.
+- 예약 캘린더: 현재 조회 페이지의 게시 일정과 이력, 게시물 열기·복제, 검수 후 예약 변경.
+- 결과·오류: SNS 계정별 결과와 실제 게시물 링크, 실패 안내, 확실한 실패 작업만 수동 재시도, 남은 예약 취소.
 
-현재 파일 선택은 로컬 미리보기만 제공한다. Backend media storage endpoint가 아직 없으므로 실제 게시에는 업로드 완료된 HTTPS 이미지 URL을 입력해야 한다. browser blob URL이나 임시 파일 경로는 post payload에 보내지 않는다.
+파일 선택은 실제 Backend multipart 업로드를 수행한다. 4MB 미만의 JPEG·PNG·MP4를 지원하며 선택적으로 중앙을 기준으로 정사각형 JPEG로 변환한다. 업로드한 파일은 공개 게시용 HTTPS URL로 저장한다.
+
+초안은 승인 전 발행되지 않는다. 저장된 게시 대상은 고정이고, 승인된 콘텐츠는 수정할 수 없다. 변경이 필요하면 새 초안으로 복제한다. 실제 OAuth·Redis·SNS·공개 미디어 확인은 별도 운영 검증이다.

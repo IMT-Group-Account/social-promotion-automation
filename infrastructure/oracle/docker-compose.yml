@@ -13,6 +13,10 @@ services:
   api:
     <<: *backend
     command: ["node", "dist/src/main.js"]
+    environment:
+      MEDIA_STORAGE_DIR: /app/uploads
+    volumes:
+      - media-uploads:/app/uploads
     ports:
       - "${API_PORT:-3000}:3000"
     healthcheck:
@@ -33,3 +37,6 @@ services:
     command: ["node", "dist/src/scheduler/scheduler.bootstrap.js"]
     environment:
       SCHEDULER_ENABLED: "true"
+
+volumes:
+  media-uploads:

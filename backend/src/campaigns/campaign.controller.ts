@@ -8,17 +8,17 @@ export class CampaignController {
   constructor(private readonly campaigns: CampaignService) {}
 
   @Post()
-  create(@Req() request: AuthenticatedRequest, @Body() dto: CreateCampaignDto) {
-    return { data: this.campaigns.create(request.user!.id, dto.name), error: null, meta: {} };
+  async create(@Req() request: AuthenticatedRequest, @Body() dto: CreateCampaignDto) {
+    return { data: await this.campaigns.create(request.user!.id, dto.name), error: null, meta: {} };
   }
 
   @Get()
-  list(@Req() request: AuthenticatedRequest) {
+  async list(@Req() request: AuthenticatedRequest) {
     return { data: this.campaigns.findAllOwnedBy(request.user!.id), error: null, meta: {} };
   }
 
   @Get(':campaignId')
-  getCampaign(@Req() request: AuthenticatedRequest, @Param('campaignId') campaignId: string) {
+  async getCampaign(@Req() request: AuthenticatedRequest, @Param('campaignId') campaignId: string) {
     return { data: this.campaigns.findOwnedBy(campaignId, request.user!.id), error: null, meta: {} };
   }
 }

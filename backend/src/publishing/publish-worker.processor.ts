@@ -22,12 +22,17 @@ export class PublishWorkerProcessor {
     private readonly publishing: PublishingService,
   ) {}
 
-  async process(publishJobId: string, leaseMs: number, attempt = 1): Promise<PublishWorkerLogContext | null> {
-    const claimed = await this.repository.claimPublishJob(publishJobId, leaseMs);
+  async process(publishJobId: string, leaseMs: number, attempt = 1, queueJobId?: string): Promise<PublishWorkerLogContext | null> {
+    const claimed = await this.repository.claimPublishJob(publishJobId, leaseMs, queueJobId);
     // A duplicate BullMQ delivery or cancelled/previously completed job is safe
     // to acknowledge because the database state is the source of truth.
     if (!claimed) return null;
     let job = claimed.job;
+    // A crash after durable remote confirmation must only finish local persistence.
+    if (job.status === 'remote_confirmed' && job.remotePostId && job.publishedAt) {
+      await this.repository.saveExecution({ok:true,job,result:{remotePostId:job.remotePostId,publishedAt:job.publishedAt,remotePostUrl:job.remotePostUrl??undefined}},false,null);
+      return this.logContext(claimed.post.campaignId,job,attempt,null);
+    }
     if (job.remoteRequestKey) {
       const reconciliation = await this.publishing.reconcile(claimed.post, job);
       if (reconciliation.status === 'confirmed') {

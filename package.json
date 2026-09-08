@@ -12,7 +12,11 @@
     "lint": "eslint backend/src backend/test --max-warnings=0",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsc -p tsconfig.json && node --test dist/test",
-    "build": "tsc -p tsconfig.build.json && node scripts/verify-sql-migrations.mjs"
+    "build": "tsc -p tsconfig.build.json && node scripts/verify-sql-migrations.mjs",
+    "test:editorial:db": "npm run build && node scripts/test-editorial-db.mjs",
+    "test:editorial:local": "npm run build && node scripts/run-editorial-local.mjs",
+    "test:editorial:fixture": "npm run build && node scripts/editorial-browser-fixture.mjs",
+    "check:editorial": "node scripts/check-editorial-readiness.mjs"
   },
   "engines": {
     "node": ">=20.9.0"

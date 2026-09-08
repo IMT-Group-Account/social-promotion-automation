@@ -8,6 +8,7 @@ export class PgOAuthAccountRepository implements OAuthAccountRepository {
   private pool: Pool | undefined;
 
   async createState(state: OAuthAuthorizationState): Promise<void> {
+    await this.db().query('INSERT INTO users(id) VALUES($1) ON CONFLICT(id) DO NOTHING', [state.userId]);
     await this.db().query(
       `INSERT INTO oauth_states (state_hash, user_id, platform, callback_route, code_verifier_encrypted, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,

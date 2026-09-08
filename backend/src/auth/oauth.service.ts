@@ -64,13 +64,24 @@ export class OauthService {
     });
   }
 
-  async selectFacebookPage(userId: string, selectionId: string, pageId: string): Promise<ConnectedSocialAccount> {
+  async selectFacebookPage(userId: string, selectionId: string, pageId: string, platform: 'facebook'|'instagram' = 'facebook'): Promise<ConnectedSocialAccount> {
     if (!userId?.trim()) throw new UnauthorizedException('An authenticated user context is required.');
     if (!selectionId || !pageId) throw new BadRequestException('Facebook Page selection is incomplete.');
     const selected = await this.repository.consumeFacebookPageSelection(this.hashState(selectionId), userId, pageId);
     if (!selected) throw new UnauthorizedException('Facebook Page selection is invalid, expired, or already used.');
+    let platformAccountId=selected.pageId, accountName=selected.pageName;
+    if(platform==='instagram') {
+      const base=process.env.FACEBOOK_GRAPH_API_BASE_URL;
+      if(!base||new URL(base).protocol!=='https:')throw new BadRequestException('Meta Graph API URL is not configured.');
+      const url=new URL(`${base.replace(/\/$/,'')}/${encodeURIComponent(selected.pageId)}`);
+      url.searchParams.set('fields','instagram_business_account{id,username}');
+      const response=await fetch(url,{headers:{authorization:`Bearer ${this.tokens.decrypt(selected.pageAccessTokenEncrypted)}`},redirect:'error',signal:AbortSignal.timeout(15000)});
+      const data=await response.json() as {instagram_business_account?:{id?:string;username?:string}};
+      if(!response.ok||!data.instagram_business_account?.id)throw new BadRequestException('선택한 페이지에 Instagram 프로페셔널 계정이 연결되어 있지 않습니다. 다시 연결하세요.');
+      platformAccountId=data.instagram_business_account.id;accountName=data.instagram_business_account.username??selected.pageName;
+    }
     return this.repository.upsertSocialAccount({
-      userId: selected.userId, platform: 'facebook', platformAccountId: selected.pageId, accountName: selected.pageName,
+      userId: selected.userId, platform, platformAccountId, accountName,
       accessTokenEncrypted: selected.pageAccessTokenEncrypted, refreshTokenEncrypted: null, expiresAt: null,
       scope: selected.scope, tokenKeyVersion: this.tokens.keyVersion(),
     });

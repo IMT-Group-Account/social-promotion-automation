@@ -1,5 +1,7 @@
 # Frontend Backend API contract
 
+> Editorial workflow update: migration 014 is required. `POST /api/posts` now creates a draft, and publishing/scheduling require `approvedRevision`. See [editorial-workflow.md](editorial-workflow.md) for the current additional endpoints and setup. Browser calls use the same-origin Next.js `/api/backend/*` BFF; only that server forwards the service JWT to NestJS.
+
 Frontend never calls LinkedIn, Meta, Threads, X, Redis, or storage-provider APIs directly. It calls only this NestJS API with `Authorization: Bearer <our-service-jwt>`; the global `ServiceJwtAuthGuard` verifies the service JWT and derives `req.user.id` from its `sub` claim before the server verifies ownership and keeps every provider token server-side.
 
 All user API routes return `{ "data": ..., "error": null, "meta": {} }` on success. Missing, malformed, expired, incorrectly issued/audienced, or invalidly signed Bearer tokens return `401`; resources owned by a different user are returned as `404`. OAuth callbacks, `/api/health`, and documented Kakao inbound routes are provider/public exceptions and do not use a browser JWT.
@@ -22,7 +24,7 @@ Nest applies a global `ValidationPipe` with `whitelist`, `forbidNonWhitelisted`,
 
 ```json
 {
-  "campaignId": "campaign_001",
+  "campaignId": "00000000-0000-4000-8000-000000000001",
   "content": {
     "title": "Support our campaign",
     "body": "Help us reach our goal...",
@@ -30,8 +32,8 @@ Nest applies a global `ValidationPipe` with `whitelist`, `forbidNonWhitelisted`,
     "media": [{ "type": "image", "url": "https://cdn.example.com/image.jpg" }]
   },
   "targets": [
-    { "platform": "linkedin", "accountId": "account_linkedin_001" },
-    { "platform": "x", "accountId": "account_x_001" }
+    { "platform": "linkedin", "accountId": "00000000-0000-4000-8000-000000000002" },
+    { "platform": "x", "accountId": "00000000-0000-4000-8000-000000000003" }
   ],
   "scheduledAt": "2026-08-21T09:00:00+09:00"
 }
@@ -42,7 +44,7 @@ The authenticated server derives `ownerId`; clients must not submit it. The serv
 ```json
 {
   "data": {
-    "post": { "id": "post_001", "status": "scheduled" },
+    "post": { "id": "post_001", "status": "draft", "revision": 1 },
     "jobs": [
       { "id": "job_001", "platform": "linkedin", "status": "waiting" },
       { "id": "job_002", "platform": "x", "status": "waiting" }
@@ -56,8 +58,8 @@ The authenticated server derives `ownerId`; clients must not submit it. The serv
 | Method | Route | Purpose |
 | --- | --- | --- |
 | GET | `/api/posts/:id` | Read owned source content and per-platform jobs |
-| POST | `/api/posts/:id/publish` | Request immediate queue eligibility |
-| POST | `/api/posts/:id/schedule` | Set `{ "scheduledAt": "ISO-8601" }` |
+| POST | `/api/posts/:id/publish` | Approve `{ "approvedRevision": 1 }` and request immediate queue eligibility |
+| POST | `/api/posts/:id/schedule` | Approve `{ "approvedRevision": 1, "scheduledAt": "ISO-8601" }` |
 | GET | `/api/posts/:id/results` | Per-platform status, remote IDs/URLs, and errors |
 | GET | `/api/posts/:id/analytics` | Latest normalized server-collected metrics by platform; never includes raw metrics |
 

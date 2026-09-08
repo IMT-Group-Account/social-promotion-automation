@@ -1,48 +1,25 @@
-import { Body, Controller, Get, Param, Post as HttpPost, Req } from '@nestjs/common';
-import { AnalyticsService } from '../analytics/analytics.service';
+import { Body, Controller, Get, Param, ParseIntPipe, DefaultValuePipe, ParseUUIDPipe, Patch, Post, Query, Req, BadRequestException } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
-import { CampaignService } from '../campaigns/campaign.service';
-import { CreatePostDto, SchedulePostDto } from './post.dto';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { ApprovePostDto, CreatePostDto, SchedulePostDto, UpdateDraftDto } from './post.dto';
 import { PostService } from './post.service';
-
+const result=<T>(data:T)=>({data,error:null,meta:{}});
 @Controller('posts')
 export class PostController {
-  constructor(
-    private readonly posts: PostService,
-    private readonly campaigns: CampaignService,
-    private readonly analytics: AnalyticsService,
-  ) {}
-
-  @HttpPost()
-  create(@Req() request: AuthenticatedRequest, @Body() dto: CreatePostDto) {
-    const ownerId = request.user!.id;
-    this.campaigns.findOwnedBy(dto.campaignId, ownerId);
-    return { data: this.posts.create(ownerId, dto), error: null, meta: {} };
+  constructor(private readonly posts:PostService,private readonly analytics:AnalyticsService){}
+  @Post() async create(@Req() r:AuthenticatedRequest,@Body() dto:CreatePostDto){return result(await this.posts.create(r.user!.id,dto));}
+  @Get() async list(@Req() r:AuthenticatedRequest,@Query('offset',new DefaultValuePipe(0),ParseIntPipe) offset:number){
+    if(offset<0||offset>100000)throw new BadRequestException('Invalid offset.');
+    return result(await this.posts.list(r.user!.id,offset));
   }
-
-  @Get(':postId')
-  getOne(@Req() request: AuthenticatedRequest, @Param('postId') postId: string) {
-    return { data: this.posts.findOwned(postId, request.user!.id), error: null, meta: {} };
-  }
-
-  @HttpPost(':postId/publish')
-  publish(@Req() request: AuthenticatedRequest, @Param('postId') postId: string) {
-    return { data: this.posts.publishNow(request.user!.id, postId), error: null, meta: { dispatch: 'queued' } };
-  }
-
-  @HttpPost(':postId/schedule')
-  schedule(@Req() request: AuthenticatedRequest, @Param('postId') postId: string, @Body() dto: SchedulePostDto) {
-    return { data: this.posts.schedule(request.user!.id, postId, dto.scheduledAt), error: null, meta: { dispatch: 'queued' } };
-  }
-
-  @Get(':postId/results')
-  results(@Req() request: AuthenticatedRequest, @Param('postId') postId: string) {
-    const result = this.posts.findOwned(postId, request.user!.id);
-    return { data: { postId: result.post.id, status: this.posts.summarizeStatus(result.jobs), jobs: result.jobs }, error: null, meta: {} };
-  }
-
-  @Get(':postId/analytics')
-  async postAnalytics(@Req() request: AuthenticatedRequest, @Param('postId') postId: string) {
-    return { data: await this.analytics.postDashboard(request.user!.id, postId), error: null, meta: {} };
-  }
+  @Get(':id') async get(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string){return result(await this.posts.findOwned(id,r.user!.id));}
+  @Patch(':id') async update(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string,@Body() dto:UpdateDraftDto){return result(await this.posts.update(r.user!.id,id,dto));}
+  @Get(':id/preview') async preview(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string){return result(await this.posts.preview(r.user!.id,id));}
+  @Post(':id/publish') async publish(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string,@Body() dto:ApprovePostDto){return result(await this.posts.publishNow(r.user!.id,id,dto.approvedRevision));}
+  @Post(':id/schedule') async schedule(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string,@Body() dto:SchedulePostDto){return result(await this.posts.schedule(r.user!.id,id,dto.scheduledAt,dto.approvedRevision));}
+  @Post(':id/cancel') async cancel(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string,@Body() dto:ApprovePostDto){return result(await this.posts.cancel(r.user!.id,id,dto.approvedRevision));}
+  @Post(':id/jobs/:jobId/retry') async retry(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string,@Param('jobId',ParseUUIDPipe) jobId:string,@Body() dto:ApprovePostDto){return result(await this.posts.retry(r.user!.id,id,jobId,dto.approvedRevision));}
+  @Post(':id/duplicate') async duplicate(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string){return result(await this.posts.duplicate(r.user!.id,id));}
+  @Get(':id/results') async results(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string){const v=await this.posts.findOwned(id,r.user!.id);return result({postId:id,status:v.post.status,jobs:v.jobs,revision:v.post.revision});}
+  @Get(':id/analytics') async analyticsForPost(@Req() r:AuthenticatedRequest,@Param('id',ParseUUIDPipe) id:string){return result(await this.analytics.postDashboard(r.user!.id,id));}
 }

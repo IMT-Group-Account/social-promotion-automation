@@ -11,7 +11,7 @@ export interface PublishOutboxRepository {
   claimOutbox(limit: number, leaseMs: number): Promise<readonly PublishQueueRecord[]>;
   markOutboxEnqueued(record: PublishQueueRecord): Promise<void>;
   releaseOutbox(record: PublishQueueRecord, errorMessage: string): Promise<void>;
-  claimPublishJob(jobId: string, leaseMs: number): Promise<ClaimedPublishJob | null>;
+  claimPublishJob(jobId: string, leaseMs: number, queueJobId?: string): Promise<ClaimedPublishJob | null>;
   markRemoteRequesting(jobId: string, idempotencyKey: string, leaseMs: number): Promise<SocialPublishJob>;
   confirmRemotePublication(job: SocialPublishJob): Promise<SocialPublishJob>;
   recordAmbiguousRemoteOutcome(job: SocialPublishJob, retryPending: boolean, nextRetryAt: Date | null): Promise<void>;

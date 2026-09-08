@@ -4,6 +4,7 @@ import { SelectFacebookPageDto } from './integrations.dto';
 import { OAUTH_ACCOUNT_REPOSITORY, type OAuthAccountRepository } from './oauth-account.repository';
 import { OauthService } from './oauth.service';
 import type { OAuthPlatform, SocialAccountPlatform } from './oauth.types';
+import { missingPublishingScopes } from '../publishing/publishing-permissions';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -14,7 +15,9 @@ export class IntegrationsController {
 
   @Get()
   async list(@Req() request: AuthenticatedRequest) {
-    return { data: await this.accounts.listSocialAccounts(request.user!.id), error: null, meta: {} };
+    const accounts = await this.accounts.listSocialAccounts(request.user!.id);
+    return { data: accounts.map(a=>({...a,status:a.status==='active'&&a.expiresAt&&a.expiresAt<=new Date()?'expired':a.status,
+      missingScopes:missingPublishingScopes(a.platform,a.scope,a.platformAccountId)})), error: null, meta: {} };
   }
 
   @Post('linkedin/connect') connectLinkedIn(@Req() request: AuthenticatedRequest) { return this.connect(request, 'linkedin'); }
@@ -25,7 +28,7 @@ export class IntegrationsController {
 
   @Post('facebook/pages/select')
   async selectFacebookPage(@Req() request: AuthenticatedRequest, @Body() dto: SelectFacebookPageDto) {
-    return { data: await this.oauth.selectFacebookPage(request.user!.id, dto.selectionId, dto.pageId), error: null, meta: {} };
+    return { data: await this.oauth.selectFacebookPage(request.user!.id, dto.selectionId, dto.pageId, dto.platform), error: null, meta: {} };
   }
 
   @Delete(':integrationId')

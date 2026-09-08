@@ -1,6 +1,7 @@
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 export class SelectFacebookPageDto {
+  @IsOptional() @IsIn(['facebook','instagram']) platform?: 'facebook'|'instagram';
   @IsString()
   @IsNotEmpty()
   @MaxLength(200)

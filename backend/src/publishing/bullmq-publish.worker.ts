@@ -22,7 +22,7 @@ export class BullMqPublishWorker implements OnModuleDestroy {
     this.queue = new Queue<PublishQueueMessage>(config.queueName, { connection: config.redisConnection });
     this.worker = new Worker<PublishQueueMessage, PublishWorkerLogContext | null>(
       config.queueName,
-      async (job) => this.processor.process(job.data.publishJobId, config.workerLeaseMs, job.attemptsMade + 1),
+      async (job) => this.processor.process(job.data.publishJobId, config.workerLeaseMs, job.attemptsMade + 1, job.id),
       {
         connection: config.redisConnection,
         concurrency: config.workerConcurrency,

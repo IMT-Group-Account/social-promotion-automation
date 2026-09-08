@@ -26,11 +26,12 @@ export class LinkedInCredentialService implements LinkedInCredentialResolver {
     const account = await this.accounts.findActiveSocialAccount(socialAccountId, 'linkedin');
     if (!account) throw new NotFoundException('An active LinkedIn account was not found.');
     if (account.expiresAt && account.expiresAt <= new Date()) throw new ForbiddenException('The LinkedIn access token has expired and must be reconnected.');
-    if (!/^urn:li:(organization|person):[^:]+$/.test(account.platformAccountId)) {
+    const authorUrn=/^[A-Za-z0-9_-]+$/.test(account.platformAccountId)?`urn:li:person:${account.platformAccountId}`:account.platformAccountId;
+    if (!/^urn:li:(organization|person):[^:]+$/.test(authorUrn)) {
       throw new ForbiddenException('LinkedIn publishing requires a verified person or organization author URN.');
     }
     return {
-      socialAccountId: account.id, authorUrn: account.platformAccountId,
+      socialAccountId: account.id, authorUrn,
       accessToken: this.tokens.decrypt(account.accessTokenEncrypted), scope: new Set(account.scope),
     };
   }

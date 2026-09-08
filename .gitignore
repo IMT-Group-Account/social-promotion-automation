@@ -7,3 +7,6 @@ dist/
 !.env.example
 infrastructure/oracle/backend.env
 promotion_autopilot/
+.test-results.log
+.artifacts/
+uploads/

@@ -5,16 +5,16 @@ import { InMemoryPostRepository } from '../src/posts/post.repository';
 import { PostService } from '../src/posts/post.service';
 import { type PublishJobStatus, type SocialPublishJob } from '../src/posts/post.entity';
 
-test('creates one waiting job per selected platform account', () => {
+test('creates one waiting job per selected platform account', async () => {
   const service = new PostService(new InMemoryPostRepository(), new MediaService());
-  const { post, jobs } = service.create('owner_001', {
+  const { post, jobs } = await service.create('owner_001', {
     campaignId: 'campaign_001',
     content: { title: 'Support', body: 'Help us reach our goal.', url: 'https://example.com/campaign/123', media: [{ type: 'image', url: 'https://cdn.example.com/image.jpg' }] },
     targets: [{ platform: 'linkedin', accountId: 'linkedin_001' }, { platform: 'facebook', accountId: 'facebook_001' }, { platform: 'x', accountId: 'x_001' }],
     scheduledAt: '2026-08-21T09:00:00+09:00',
   });
 
-  assert.equal(post.status, 'scheduled');
+  assert.equal(post.status, 'draft');
   assert.deepEqual(jobs.map((job) => job.status), ['waiting', 'waiting', 'waiting']);
   assert.ok(jobs.every((job) => job.postId === post.id));
 });
