@@ -67,6 +67,11 @@ Individual adapter outcomes live on their corresponding job fields: `publishedAt
 
 Provider-adapter operations use only a persisted `remotePostId` together with its `socialAccountId`; the local post ID is never a provider API identifier. Provider analytics collection is scheduler-only; no browser API directly invokes a provider analytics lookup.
 
+`content.media` accepts at most four ordered items. X supports up to four
+attachments. The current Facebook, Instagram, Threads, and LinkedIn adapters
+accept at most one supported item, and the preview/approval gate rejects an
+incompatible multi-media draft before queueing.
+
 ## Analytics
 
 | Method | Route | Purpose |
@@ -75,6 +80,16 @@ Provider-adapter operations use only a persisted `remotePostId` together with it
 | GET | `/api/analytics/campaigns/:campaignId/raw?platform=x&limit=50&cursor=<opaque>` | Owned campaign's paginated persisted raw metric snapshots |
 
 The dashboard response never contains `rawMetrics`. The raw endpoint is authenticated, verifies campaign ownership, returns up to 100 records per page in capture-time descending order, and exposes no provider access token or provider request capability.
+
+## Operations
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/api/operations/audit` | Latest 100 audit events belonging to the authenticated owner |
+| GET | `/api/operations/failure-alerts` | Latest 100 terminal publishing alerts for the owner's posts |
+
+Both queries derive ownership from the verified JWT subject. They do not expose
+OAuth credentials, post bodies, webhook tokens, or raw provider responses.
 
 ## Integrations
 

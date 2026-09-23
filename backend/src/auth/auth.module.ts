@@ -13,12 +13,14 @@ import { ThreadsOAuthProvider } from './threads-oauth.provider';
 import { XOAuthProvider } from './x-oauth.provider';
 import { ServiceJwtAuthGuard } from './service-jwt-auth.guard';
 import { ServiceJwtVerifier } from './service-jwt-verifier.service';
+import { RoleGuard } from './role.guard';
 
 @Module({
   controllers: [OauthController, IntegrationsController],
   providers: [
     OauthService, TokenService, ServiceJwtVerifier, PgOAuthAccountRepository, LinkedInOAuthProvider, FacebookOAuthProvider, ThreadsOAuthProvider, XOAuthProvider,
     { provide: APP_GUARD, useClass: ServiceJwtAuthGuard },
+    { provide: APP_GUARD, useClass: RoleGuard },
     { provide: OAUTH_ACCOUNT_REPOSITORY, useExisting: PgOAuthAccountRepository },
     {
       provide: OAUTH_PROVIDERS,

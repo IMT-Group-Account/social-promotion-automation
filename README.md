@@ -1,18 +1,23 @@
 # Social Promotion Automation
 
+Windows users can double-click `start.cmd`. When `app.url` contains the deployed
+HTTPS admin URL it opens the production app; before deployment it offers a
+provider-free local demo and the remaining-setup guide.
+
 Node.js + TypeScript + NestJS scheduled social publishing with a Next.js editorial console. See [the first-stage editorial workflow](docs/editorial-workflow.md) for current setup, API changes, verification, and limits.
 
 One `post` owns its editorial content and schedule. Each selected social account receives its own `social_publish_jobs` row. A worker claims and changes only its own job row; a failure on X therefore cannot mark LinkedIn, Instagram, Facebook, or Threads as failed.
 
 ## Layout
 
-- `backend/migrations/001_social_publishing_core.sql`: PostgreSQL schema and integrity constraints.
+- `backend/migrations`: PostgreSQL schema, integrity constraints, editorial state, reconciliation, durable failure-alert delivery, and runtime heartbeats through migration 016.
 - `backend/src/posts`: post entities, service, controller boundary, and repository contract.
 - `backend/src/publishing`: formatter, queue boundary, adapter registry, and platform adapters.
 - `backend/src/publishing/publish-worker.bootstrap.ts`: separate Redis/BullMQ worker that dispatches the PostgreSQL outbox and executes one SNS job at a time.
 - `backend/src/publishing/x-api-usage.service.ts`: X pay-per-use request reservation/settlement ledger using integer micro-USD estimates.
 - `backend/src/kakao-channel`: Kakao Channel inbound-link and consultation-conversion funnel, separate from social publishing jobs.
 - `backend/src/analytics`: per-job analytics collection leases, normalized metric snapshots, and campaign dashboard aggregation.
+- `backend/src/operations`: owner-scoped audit history and durable terminal-failure alert readback.
 - `backend/src/publishing/formatters`: deterministic LinkedIn/Instagram/Facebook/Threads/X presentation rules and an AI-ready platform-content contract.
 - `backend/src/auth`, `campaigns`, `analytics`, `scheduler`, `media`: NestJS modules matching the backend responsibilities.
 - `backend/src/auth`: service-JWT Bearer authentication guard, Authorization Code + PKCE, one-time CSRF state, LinkedIn/Facebook/Threads/X provider registry, AES-256-GCM token encryption, and PostgreSQL credential repository.
@@ -23,6 +28,9 @@ One `post` owns its editorial content and schedule. Each selected social account
 - `docs/api-contract.md`: frontend-to-backend-only campaign, post, result, analytics, and integration contract.
 - `docs/publishing-queue.md`: Redis/BullMQ delayed scheduling, outbox, retry, and worker deployment procedure.
 - `docs/deployment.md`: mandatory production migration, API, worker, scheduler, and health-check release order.
+- `docs/desktop-install.md`: Windows desktop-style PWA installation, security behavior, and verification.
+- `infrastructure/oracle/systemd`: preferred non-Docker API, worker, and scheduler service units.
+- `남은 것.md`: production infrastructure, credentials, provider approval, and live-verification checklist.
 
 ## Local verification
 
@@ -38,7 +46,7 @@ npm.cmd run build
 
 GitHub Actions runs the same dependency installation, lint, typecheck, test, and build sequence for every push and pull request. The workflow validates migration and publishing/authentication code without applying migrations or contacting configured providers.
 
-`build` compiles TypeScript and validates that the SQL migration contains the required table and isolation constraints. It does not apply a database migration. OAuth uses PostgreSQL when `DATABASE_URL` is configured. Every user API route requires `Authorization: Bearer <our-service-jwt>`; NestJS verifies its configured RS256 or ES256 signature against the upstream authentication service's HTTPS JWKS, plus `iss`, `aud`, `exp`, and `sub`, before mapping `sub` to `req.user.id`. Configure server-only `SERVICE_JWT_ISSUER`, `SERVICE_JWT_AUDIENCE`, `SERVICE_JWT_SIGNING_ALGORITHM`, and `SERVICE_JWT_JWKS_URL` before starting the API; do not configure a shared `SERVICE_JWT_SECRET`. Frontend calls only `/api/campaigns`, `/api/posts`, and `/api/integrations`; callback routes are provider-facing. Campaigns and posts use PostgreSQL persistence. Apply migration 014 and configure the application login provider, public media storage, Redis, and SNS OAuth before operation; missing configuration fails closed.
+`build` compiles TypeScript and validates that the SQL migration contains the required table and isolation constraints. It does not apply a database migration. OAuth uses PostgreSQL when `DATABASE_URL` is configured. Every user API route requires `Authorization: Bearer <our-service-jwt>`; NestJS verifies its configured RS256 or ES256 signature against the upstream authentication service's HTTPS JWKS, plus `iss`, `aud`, `exp`, and `sub`, before mapping `sub` to `req.user.id`. Configure server-only `SERVICE_JWT_ISSUER`, `SERVICE_JWT_AUDIENCE`, `SERVICE_JWT_SIGNING_ALGORITHM`, and `SERVICE_JWT_JWKS_URL` before starting the API; do not configure a shared `SERVICE_JWT_SECRET`. Frontend calls the same-origin BFF for campaigns, posts, integrations, media, analytics, and Kakao Channel operations; callback routes are provider-facing. Apply migrations 001 through 016 and configure the login provider, public media storage, Redis, failure-alert webhook, and SNS OAuth before operation. Verify one platform at a time with `npm.cmd run check:provider -- <platform>` and [the staging provider gate](docs/staging-provider-verification.md).
 
 Scheduled publishing uses a separate worker after migration `009_bullmq_publish_outbox.sql` has been applied. Set server-only `REDIS_URL` and `PUBLISH_WORKER_ENABLED=true`, then run `npm.cmd run start:worker`; see [docs/publishing-queue.md](docs/publishing-queue.md). Do not put Redis, OAuth, or SNS tokens in frontend variables or browser storage.
 

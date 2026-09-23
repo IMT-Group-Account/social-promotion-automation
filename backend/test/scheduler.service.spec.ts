@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AnalyticsService } from '../src/analytics/analytics.service';
 import { SchedulerService } from '../src/scheduler/scheduler.service';
+import type { RuntimeHeartbeatService } from '../src/runtime/runtime-heartbeat.service';
 
 test('does not collect analytics until the dedicated scheduler process starts it', async () => {
   const previousInterval = process.env.ANALYTICS_COLLECTION_INTERVAL_MS;
@@ -14,13 +15,16 @@ test('does not collect analytics until the dedicated scheduler process starts it
       return { collectedJobIds: [], failed: [] };
     },
   } as unknown as AnalyticsService;
-  const scheduler = new SchedulerService(analytics);
+  let heartbeats=0;
+  const heartbeat={beat:async()=>{heartbeats+=1;}} as unknown as RuntimeHeartbeatService;
+  const scheduler = new SchedulerService(analytics,heartbeat);
 
   try {
     assert.equal(collections, 0);
     scheduler.start();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(collections, 1);
+    assert.equal(heartbeats,1);
   } finally {
     scheduler.onModuleDestroy();
     if (previousInterval === undefined) delete process.env.ANALYTICS_COLLECTION_INTERVAL_MS;

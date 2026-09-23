@@ -1,0 +1,24 @@
+[Unit]
+Description=Social Promotion Publish Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=social-promotion
+Group=social-promotion
+WorkingDirectory=/opt/social-promotion/current
+EnvironmentFile=/etc/social-promotion/backend.env
+Environment=PUBLISH_WORKER_ENABLED=true
+ExecStart=/usr/bin/node dist/src/publishing/publish-worker.bootstrap.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

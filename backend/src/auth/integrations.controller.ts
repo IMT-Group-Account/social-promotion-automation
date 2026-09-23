@@ -5,6 +5,7 @@ import { OAUTH_ACCOUNT_REPOSITORY, type OAuthAccountRepository } from './oauth-a
 import { OauthService } from './oauth.service';
 import type { OAuthPlatform, SocialAccountPlatform } from './oauth.types';
 import { missingPublishingScopes } from '../publishing/publishing-permissions';
+import { RequireRoles } from './roles.decorator';
 
 @Controller('integrations')
 export class IntegrationsController {
@@ -20,18 +21,20 @@ export class IntegrationsController {
       missingScopes:missingPublishingScopes(a.platform,a.scope,a.platformAccountId)})), error: null, meta: {} };
   }
 
-  @Post('linkedin/connect') connectLinkedIn(@Req() request: AuthenticatedRequest) { return this.connect(request, 'linkedin'); }
-  @Post('facebook/connect') connectFacebook(@Req() request: AuthenticatedRequest) { return this.connect(request, 'facebook'); }
-  @Post('instagram/connect') connectInstagram(@Req() request: AuthenticatedRequest) { return this.connect(request, 'instagram'); }
-  @Post('threads/connect') connectThreads(@Req() request: AuthenticatedRequest) { return this.connect(request, 'threads'); }
-  @Post('x/connect') connectX(@Req() request: AuthenticatedRequest) { return this.connect(request, 'x'); }
+  @Post('linkedin/connect') @RequireRoles('admin') connectLinkedIn(@Req() request: AuthenticatedRequest) { return this.connect(request, 'linkedin'); }
+  @Post('facebook/connect') @RequireRoles('admin') connectFacebook(@Req() request: AuthenticatedRequest) { return this.connect(request, 'facebook'); }
+  @Post('instagram/connect') @RequireRoles('admin') connectInstagram(@Req() request: AuthenticatedRequest) { return this.connect(request, 'instagram'); }
+  @Post('threads/connect') @RequireRoles('admin') connectThreads(@Req() request: AuthenticatedRequest) { return this.connect(request, 'threads'); }
+  @Post('x/connect') @RequireRoles('admin') connectX(@Req() request: AuthenticatedRequest) { return this.connect(request, 'x'); }
 
   @Post('facebook/pages/select')
+  @RequireRoles('admin')
   async selectFacebookPage(@Req() request: AuthenticatedRequest, @Body() dto: SelectFacebookPageDto) {
     return { data: await this.oauth.selectFacebookPage(request.user!.id, dto.selectionId, dto.pageId, dto.platform), error: null, meta: {} };
   }
 
   @Delete(':integrationId')
+  @RequireRoles('admin')
   async disconnect(@Req() request: AuthenticatedRequest, @Param('integrationId') integrationId: string) {
     const disconnected = await this.accounts.disconnectSocialAccount(request.user!.id, integrationId);
     if (!disconnected) throw new NotFoundException('Integration not found.');

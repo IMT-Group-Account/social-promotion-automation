@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
+import { RequireRoles } from '../auth/roles.decorator';
 import { CreateCampaignDto } from './campaign.dto';
 import { CampaignService } from './campaign.service';
 
@@ -8,6 +9,7 @@ export class CampaignController {
   constructor(private readonly campaigns: CampaignService) {}
 
   @Post()
+  @RequireRoles('editor')
   async create(@Req() request: AuthenticatedRequest, @Body() dto: CreateCampaignDto) {
     return { data: await this.campaigns.create(request.user!.id, dto.name), error: null, meta: {} };
   }

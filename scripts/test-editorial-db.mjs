@@ -32,7 +32,7 @@ export async function testEditorialDatabase(connectionString){
       const sql=await readFile(new URL(`../backend/migrations/${name}`,import.meta.url),'utf8');
       await db.transaction(client=>client.query(sql));
     }
-    pass('all 14 migrations execute on real PostgreSQL');
+    pass('all 16 migrations execute on real PostgreSQL');
     const owner=randomUUID(),other=randomUUID();
     const campaign=await campaignService.create(owner,'Editorial integration fixture');
     await db.db().query('INSERT INTO users(id) VALUES($1)',[other]);

@@ -36,6 +36,11 @@ npm.cmd run start:worker
 staging environment with PostgreSQL, Redis, and approved provider credentials.
 Actual provider publication needs separate operational authorization.
 
+For the preferred non-Docker production deployment, the supplied
+`social-promotion-worker.service` unit sets `PUBLISH_WORKER_ENABLED=true` only
+for the worker process. Operate it independently with `systemctl`; the API must
+never inherit that flag.
+
 ## Durable state machine
 
 ```text
@@ -50,7 +55,11 @@ waiting/retrying
 uses 30 seconds, 2 minutes, then 10 minutes; the fourth failure is terminal.
 Authentication/authorization provider errors and other permanent 4xx outcomes
 are terminal. A terminal failure creates a `social_publish_failure_alerts`
-outbox record in the same transaction.
+outbox record in the same transaction. Migration 015 adds lease-based webhook
+delivery. When `FAILURE_ALERT_WEBHOOK_URL` is configured, the worker sends a
+redacted event without post content or raw provider responses and retries a
+failed delivery after five minutes. Without a webhook, the row remains pending
+for operator inspection rather than being discarded.
 
 Before any irreversible provider write, the worker persists a deterministic
 `remote_request_key`. For an unknown network/5xx outcome it reconciles before

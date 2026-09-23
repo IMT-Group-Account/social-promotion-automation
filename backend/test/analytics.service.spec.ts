@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AnalyticsController } from '../src/analytics/analytics.controller';
 import { AnalyticsService } from '../src/analytics/analytics.service';
 import type {
   AnalyticsCollectionTarget,
@@ -74,6 +75,16 @@ test('returns platform-native metrics and leaves unavailable dashboard metrics a
   assert.deepEqual(dashboard.platforms.find((item) => item.platform === 'instagram'), {
     platform: 'instagram', capturedAt: null,
   });
+});
+
+test('analytics controller keeps the common API response envelope', async () => {
+  const repository = new MemoryAnalyticsRepository([], []);
+  const controller = new AnalyticsController(new AnalyticsService([], repository));
+  const response = await controller.dashboard({ headers: {}, user: { id: 'owner-001' } }, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(response.error, null);
+  assert.deepEqual(response.meta, {});
+  assert.equal(response.data.campaignId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(response.data.platforms.length, 5);
 });
 
 test('returns stored raw metrics only through the paginated campaign raw endpoint contract', async () => {

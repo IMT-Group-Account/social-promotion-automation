@@ -13,6 +13,8 @@ const retryMigration = await readFile(new URL('../backend/migrations/010_publish
 const canonicalModelMigration = await readFile(new URL('../backend/migrations/011_postgresql_canonical_social_model.sql', import.meta.url), 'utf8');
 const optionalMetricsMigration = await readFile(new URL('../backend/migrations/012_social_metrics_optional_platform_metrics.sql', import.meta.url), 'utf8');
 const remoteReconciliationMigration = await readFile(new URL('../backend/migrations/013_publish_remote_reconciliation.sql', import.meta.url), 'utf8');
+const failureAlertDeliveryMigration = await readFile(new URL('../backend/migrations/015_failure_alert_delivery.sql', import.meta.url), 'utf8');
+const runtimeHeartbeatMigration = await readFile(new URL('../backend/migrations/016_runtime_heartbeats.sql', import.meta.url), 'utf8');
 for (const requiredText of [
   'CREATE TABLE posts',
   'CREATE TABLE social_publish_jobs',
@@ -64,5 +66,11 @@ for (const requiredText of ['ALTER COLUMN views DROP NOT NULL', 'ADD COLUMN impr
 }
 for (const requiredText of ["'claimed', 'remote_requesting', 'remote_confirmed'", 'remote_request_key text', 'remote_request_started_at timestamptz', 'social_publish_jobs_remote_reconciliation_idx']) {
   if (!remoteReconciliationMigration.includes(requiredText)) throw new Error(`Migration is missing remote reconciliation invariant: ${requiredText}`);
+}
+for (const requiredText of ["'pending', 'processing', 'delivered', 'failed'", 'delivery_attempts integer', 'lease_expires_at timestamptz', 'social_publish_failure_alerts_delivery_idx']) {
+  if (!failureAlertDeliveryMigration.includes(requiredText)) throw new Error(`Migration is missing failure alert delivery invariant: ${requiredText}`);
+}
+for (const requiredText of ['CREATE TABLE runtime_heartbeats', "process_name IN ('worker','scheduler')", 'heartbeat_at timestamptz']) {
+  if (!runtimeHeartbeatMigration.includes(requiredText)) throw new Error(`Migration is missing runtime heartbeat invariant: ${requiredText}`);
 }
 console.log('SQL publishing and OAuth migration structure verified.');

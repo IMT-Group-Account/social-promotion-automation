@@ -1,5 +1,6 @@
 export interface AuthenticatedUser {
   id: string;
+  roles?: string[];
 }
 
 export interface AuthenticatedRequest {

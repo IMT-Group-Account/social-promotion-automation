@@ -50,6 +50,16 @@ test('missing content and unexpected override platforms are rejected by HTTP val
   const pipe=new ValidationPipe(globalValidationPipeOptions);
   await assert.rejects(pipe.transform({revision:1},{type:'body',metatype:UpdateDraftDto}));
   await assert.rejects(pipe.transform({...dto(),content:{...dto().content,platformBodies:{unknown:'copy'}}},{type:'body',metatype:CreatePostDto}));
+  await assert.rejects(pipe.transform({...dto(),content:{...dto().content,media:Array.from({length:5},(_,index)=>({type:'image',url:`https://example.com/${index}.jpg`}))}},{type:'body',metatype:CreatePostDto}));
+});
+test('X preview accepts up to four ordered media items while other platforms fail closed',async()=>{
+  const {service}=setup();
+  const media=Array.from({length:4},(_,index)=>({type:'image' as const,url:`https://example.com/${index}.jpg`}));
+  const input=dto();
+  const x=await service.create('owner',{...input,content:{...input.content,media},targets:[{platform:'x',accountId:randomUUID()}]});
+  assert.equal((await service.preview('owner',x.post.id)).issues.length,0);
+  const facebook=await service.create('owner',{...input,content:{...input.content,media},targets:[{platform:'facebook',accountId:randomUUID()}]});
+  assert.ok((await service.preview('owner',facebook.post.id)).issues.some(issue=>issue.includes('1개')));
 });
 test('preflight blocks incompatible media and oversized final captions before scheduling',async()=>{
   const {service}=setup();

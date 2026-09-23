@@ -32,6 +32,10 @@ const server=createServer(async(req,res)=>{
       else data=accounts;
     }else if(parts[0]==='campaigns'){
       if(req.method==='POST'){data={id:randomUUID(),name:body.name};campaigns.push(data);}else data=campaigns;
+    }else if(parts[0]==='analytics'){
+      data={campaignId:parts[2],platforms:accounts.map((account,index)=>({platform:account.platform,capturedAt:index<2?new Date().toISOString():null,...(index===0?{reach:1240,likes:87,clicks:31}:index===1?{impressions:2300,comments:14,shares:9}:{})}))};
+    }else if(parts[0]==='operations'){
+      data=parts[1]==='audit'?[{id:randomUUID(),action:'social_post.published',entityType:'social_publish_job',entityId:fixture.jobs[0].id,metadata:{platform:'facebook'},createdAt:new Date().toISOString()}]:[{id:randomUUID(),jobId:fixture.jobs[1].id,postId:fixture.post.id,platform:'x',errorCode:'RATE_LIMIT',errorMessage:'검증용 사용 한도 오류',retryCount:4,status:'pending',deliveryAttempts:0,nextDeliveryAt:new Date().toISOString(),createdAt:new Date().toISOString(),deliveredAt:null}];
     }else if(parts[0]==='posts'){
       const id=parts[1],action=parts[2];
       if(!id)data=req.method==='POST'?await service.create(owner,body):await service.list(owner,Number(url.searchParams.get('offset')??0));

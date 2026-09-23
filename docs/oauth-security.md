@@ -26,6 +26,18 @@ Frontend
 
 ## Service JWT cutover and key rotation
 
+### Operational roles
+
+Production readiness requires `SERVICE_RBAC_ENABLED=true` and a trusted JWT
+array or string claim named by `SERVICE_JWT_ROLES_CLAIM`. The API recognizes
+three exact roles: `editor` creates and updates drafts, `publisher` approves,
+schedules, retries, and cancels publication, and `admin` manages SNS
+integrations, reads operations records, and may perform every protected role.
+The claim is accepted only after the JWT signature, issuer, audience, expiry,
+and subject have been verified. Missing or malformed roles fail closed. Keep
+RBAC disabled only during the coordinated issuer cutover; it is not production
+readiness.
+
 1. Create an `RS256` or `ES256` signing key only in the authentication server, publish its public JWK with a stable `kid` at the configured HTTPS JWKS URL, and ensure issued access tokens contain that `kid`, `iss`, and the Social Promotion API `aud`.
 2. Set `SERVICE_JWT_ISSUER`, `SERVICE_JWT_AUDIENCE`, `SERVICE_JWT_SIGNING_ALGORITHM`, and `SERVICE_JWT_JWKS_URL` on the API, then deploy this API revision. Do not supply `SERVICE_JWT_SECRET` to the API.
 3. Switch the authentication server to issue the matching asymmetric algorithm. This API intentionally has no HS256 compatibility mode, so coordinate the issuer switch with the API deployment; otherwise requests fail closed with `401`.

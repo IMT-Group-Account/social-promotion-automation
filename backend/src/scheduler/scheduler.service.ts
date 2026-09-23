@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { type SocialPublishJob } from '../posts/post.entity';
+import { RuntimeHeartbeatService } from '../runtime/runtime-heartbeat.service';
 
 @Injectable()
 export class SchedulerService implements OnModuleDestroy {
@@ -8,7 +9,7 @@ export class SchedulerService implements OnModuleDestroy {
   private timer: NodeJS.Timeout | undefined;
   private collecting = false;
 
-  constructor(private readonly analytics: AnalyticsService) {}
+  constructor(private readonly analytics: AnalyticsService,private readonly heartbeat:RuntimeHeartbeatService) {}
 
   due(jobs: readonly SocialPublishJob[], now = new Date()): readonly SocialPublishJob[] {
     return jobs.filter((job) => job.status === 'waiting' && job.scheduledAt <= now);
@@ -30,6 +31,7 @@ export class SchedulerService implements OnModuleDestroy {
     try {
       const result = await this.analytics.collectDue();
       if (result.failed.length > 0) this.logger.warn(`Analytics collection completed with ${result.failed.length} failed platform job(s).`);
+      await this.heartbeat.beat('scheduler');
     } catch (error) {
       this.logger.error('Scheduled analytics collection could not start.', error instanceof Error ? error.stack : undefined);
     } finally { this.collecting = false; }

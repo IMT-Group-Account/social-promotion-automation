@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { DatabaseService } from '../database/database.service';
 import { FacebookAdapter } from './adapters/facebook.adapter';
 import { FACEBOOK_CREDENTIAL_RESOLVER, FacebookCredentialService } from './adapters/facebook-credential.service';
 import { FACEBOOK_HTTP_CLIENT, FetchFacebookHttpClient } from './adapters/facebook-http.client';
@@ -18,6 +19,7 @@ import { X_CREDENTIAL_RESOLVER, XCredentialService } from './adapters/x-credenti
 import { FetchXHttpClient, X_HTTP_CLIENT } from './adapters/x-http.client';
 import { FetchXMediaSource, X_MEDIA_SOURCE } from './adapters/x-media-source.service';
 import { FormatterService } from './formatter.service';
+import { FailureAlertService } from './failure-alert.service';
 import { BullMqPublishQueue } from './bullmq-publish.queue';
 import { BullMqPublishWorker } from './bullmq-publish.worker';
 import { FacebookContentFormatter } from './formatters/facebook-content.formatter';
@@ -37,7 +39,7 @@ import { PgXUsageLedger, X_USAGE_LEDGER, XApiCostService } from './x-api-usage.s
 @Module({
   imports: [AuthModule],
   providers: [
-    FormatterService, PublishingService, PublishingQueue, PublishWorkerProcessor, BullMqPublishWorker, BullMqPublishQueue, PgPublishOutboxRepository,
+    DatabaseService, FormatterService, PublishingService, PublishingQueue, FailureAlertService, PublishWorkerProcessor, BullMqPublishWorker, BullMqPublishQueue, PgPublishOutboxRepository,
     LinkedInContentFormatter, InstagramContentFormatter, FacebookContentFormatter, ThreadsContentFormatter, XContentFormatter,
     LinkedInCredentialService, FetchLinkedInHttpClient, FacebookCredentialService, FetchFacebookHttpClient, InstagramCredentialService, FetchInstagramHttpClient, ThreadsCredentialService, FetchThreadsHttpClient,
     XCredentialService, FetchXHttpClient, FetchXMediaSource, PgXUsageLedger, XApiCostService,
@@ -69,6 +71,6 @@ import { PgXUsageLedger, X_USAGE_LEDGER, XApiCostService } from './x-api-usage.s
       inject: [LinkedInAdapter, FacebookAdapter, InstagramAdapter, ThreadsAdapter, XAdapter],
     },
   ],
-  exports: [PublishingService, PublishingQueue, BullMqPublishWorker, SOCIAL_ADAPTERS],
+  exports: [PublishingService, PublishingQueue, FailureAlertService, BullMqPublishWorker, SOCIAL_ADAPTERS],
 })
 export class PublishingModule {}

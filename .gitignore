@@ -5,6 +5,7 @@ dist/
 .env
 .env.*
 !.env.example
+app.url
 infrastructure/oracle/backend.env
 promotion_autopilot/
 .test-results.log

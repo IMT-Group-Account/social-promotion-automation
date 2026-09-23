@@ -16,6 +16,7 @@ interface ServiceJwtPayload {
   aud?: unknown;
   exp?: unknown;
   nbf?: unknown;
+  [claim: string]: unknown;
 }
 
 interface JwtConfiguration {
@@ -69,7 +70,13 @@ export class ServiceJwtVerifier {
     this.validateRegisteredClaims(payload);
     if (typeof payload.sub !== 'string' || payload.sub.trim().length === 0) this.invalidToken();
 
-    return { id: payload.sub };
+    if(process.env.SERVICE_RBAC_ENABLED!=='true')return { id: payload.sub };
+    const claimName=process.env.SERVICE_JWT_ROLES_CLAIM;
+    if(!claimName||!/^[A-Za-z0-9_.:-]{1,100}$/.test(claimName))this.invalidToken();
+    const value=payload[claimName];
+    const roles=typeof value==='string'?[value]:Array.isArray(value)?value:[];
+    if(!roles.length||roles.length>20||!roles.every(role=>typeof role==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(role)))this.invalidToken();
+    return { id: payload.sub, roles: roles as string[] };
   }
 
   private async getVerificationKey(kid: string): Promise<KeyObject> {

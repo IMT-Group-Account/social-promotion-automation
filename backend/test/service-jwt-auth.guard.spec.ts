@@ -8,6 +8,8 @@ import type { AuthenticatedRequest } from '../src/auth/authenticated-request';
 import { PublicRoute } from '../src/auth/public-route.decorator';
 import { ServiceJwtAuthGuard } from '../src/auth/service-jwt-auth.guard';
 import { ServiceJwtVerifier } from '../src/auth/service-jwt-verifier.service';
+import { RoleGuard } from '../src/auth/role.guard';
+import { RequireRoles } from '../src/auth/roles.decorator';
 
 type SigningAlgorithm = 'RS256' | 'ES256';
 
@@ -77,6 +79,7 @@ function executionContext(request: AuthenticatedRequest, handler: () => void = (
 }
 
 class TestController {}
+class SecuredController { @RequireRoles('publisher') publish():void{} }
 
 test('service JWT verifier refuses a legacy shared secret at startup', () => {
   configureJwks('RS256');
@@ -104,6 +107,22 @@ test('Bearer service JWT guard verifies ES256 JWTs with an EC JWKS key', async (
 
   assert.equal(await guard.canActivate(executionContext(request)), true);
   assert.deepEqual(request.user, { id: 'user_001' });
+});
+
+test('configured JWT roles are verified and server-side role requirements fail closed',async()=>{
+  configureJwks('RS256');process.env.SERVICE_RBAC_ENABLED='true';process.env.SERVICE_JWT_ROLES_CLAIM='roles';
+  try{
+    const request:AuthenticatedRequest={headers:{authorization:`Bearer ${signedToken('RS256',{roles:['editor']})}`}};
+    await new ServiceJwtAuthGuard(new Reflector(),new ServiceJwtVerifier()).canActivate(executionContext(request));
+    assert.deepEqual(request.user,{id:'user_001',roles:['editor']});
+    const secured=new SecuredController();
+    const context=executionContext(request,secured.publish);
+    Object.assign(context,{getClass:()=>SecuredController});
+    assert.throws(()=>new RoleGuard(new Reflector()).canActivate(context),/required promotion roles/);
+    request.user={id:'user_001',roles:['admin']};
+    assert.equal(new RoleGuard(new Reflector()).canActivate(context),true);
+    await assert.rejects(new ServiceJwtVerifier().verify(signedToken('RS256',{roles:[]})),/valid service access token/);
+  }finally{delete process.env.SERVICE_RBAC_ENABLED;delete process.env.SERVICE_JWT_ROLES_CLAIM;}
 });
 
 test('an unknown kid triggers one JWKS refresh so a published RS256 signing-key rotation succeeds', async () => {

@@ -10,7 +10,7 @@ async function boundedBody(request:NextRequest):Promise<ArrayBuffer|undefined>{
 }
 async function proxy(request:NextRequest,context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
-  if(!['posts','campaigns','integrations','media'].includes(path[0])||path.some(p=>!/^[-a-zA-Z0-9]+$/.test(p)))return new NextResponse(null,{status:404});
+  if(!['posts','campaigns','integrations','media','analytics','kakao-channel','operations'].includes(path[0])||path.some(p=>!/^[-a-zA-Z0-9]+$/.test(p)))return new NextResponse(null,{status:404});
   if(request.method!=='GET'&&request.headers.get('origin')!==new URL(process.env.APP_ORIGIN??request.url).origin)return new NextResponse(null,{status:403});
   const token=(await cookies()).get('promotion_session')?.value;
   if(!token)return NextResponse.json({error:{message:'로그인이 필요합니다.'}},{status:401});
